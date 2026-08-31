@@ -1,0 +1,9 @@
+# Local test output and editor backups
+*.log
+*.bak
+*.tmp
+*~
+
+# OS metadata
+Thumbs.db
+.DS_Store
