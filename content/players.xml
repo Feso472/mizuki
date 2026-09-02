@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<players root="gfx/characters/"
+         portraitroot="gfx/ui/stage/"
+         nameimageroot="gfx/ui/boss/"
+         bigportraitroot="gfx/ui/">
+    <!--
+        Temporary prototype: copied Isaac placeholders, stored under Mizuki's
+        own resource names. Replace those files with Mizuki art later.
+    -->
+    <player name="弥月"
+            skin="mizuki/character_mizuki.png"
+            hp="6"
+            bombs="0"
+            keys="0"
+            coins="0"
+            canShoot="false"
+            skinColor="-1"
+            costumeSuffix="mizuki"
+            nameimage="PlayerName_Mizuki.png"
+            portrait="PlayerPortrait_Mizuki.png"
+            birthright="Prototype pending" />
+</players>
