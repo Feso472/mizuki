@@ -72,8 +72,11 @@ local BEAM_DURATION = 42
 local BEAM_DAMAGE_PER_TICK_MULTIPLIER = 0.40
 -- Mizuki charges manually, then releases a sustained native Technology laser.
 -- Variant 2 supplies real curved-laser collision and native tear interactions.
-local MIZUKI_LASER_VARIANT = 2
+local MIZUKI_LASER_VARIANT = 11
 local MIN_CHARGE_DAMAGE_MULTIPLIER = 0.45
+local TECHNOLOGY_SOUND_SMALL_SCALE = 0.75
+local TECHNOLOGY_SOUND_LARGE_SCALE = 1.45
+local sfxManager = SFXManager()
 local MIZUKI_LASER_COLOR = Color(1, 1, 1, 1, 0, 0, 0)
 -- Colorize first converts the source to grayscale. The Technology texture is
 -- primarily pure red, whose grayscale luminance is roughly one third, so the
@@ -127,6 +130,20 @@ local function scalePlayerOffset(player, offset)
     return Vector(offset.X * scale.X, offset.Y * scale.Y)
 end
 
+local function replaceNativeTechnologyShotSound(tearScale)
+    -- Variant 2 emits the ordinary Technology sound on creation. Stop that
+    -- instance, then play exactly one sound from the appropriate size pool.
+    sfxManager:Stop(SoundEffect.SOUND_REDLIGHTNING_ZAP)
+
+    local sound = SoundEffect.SOUND_REDLIGHTNING_ZAP
+    if tearScale < TECHNOLOGY_SOUND_SMALL_SCALE then
+        sound = SoundEffect.SOUND_REDLIGHTNING_ZAP_WEAK
+    elseif tearScale >= TECHNOLOGY_SOUND_LARGE_SCALE then
+        sound = SoundEffect.SOUND_REDLIGHTNING_ZAP_STRONG
+    end
+    sfxManager:Play(sound, 1, 0, false, 1)
+end
+
 -- Glowing Hour Glass rewinds EntityPlayer state, including values associated
 -- with that snapshot. Keep the capsule transaction outside player:GetData()
 -- so the fact that it was consumed cannot itself be rewound.
@@ -134,6 +151,9 @@ local capsuleStates = {}
 -- Glowing Hour Glass also rewinds player:GetData(), so cannon-reconcile
 -- bookkeeping must live outside EntityPlayer state for the same reason.
 local cannonReconcileStates = {}
+-- Temporary vanilla Technology sound-threshold test override. Set through the
+-- built-in Lua console command and never serialized.
+local debugDamageOverride = nil
 
 local function getPlayerIndex(player)
     local game = Game()
@@ -355,8 +375,15 @@ local function updateActiveBeams(player, data)
                             1,
                             laser
                         )
+                        local scaleParams = player:GetTearHitParams(
+                            WeaponType.WEAPON_TEARS,
+                            beam.ScaleDamageMultiplier,
+                            1,
+                            nil
+                        )
                         laser.TearFlags = params.TearFlags
                         laser.CollisionDamage = params.TearDamage
+                        laser:GetData().MizukiBeamTearScale = scaleParams.TearScale
                     end
                 end
             end
@@ -504,6 +531,7 @@ local function fireMizukiBeam(player, direction, charge)
     data.MizukiLockedCannonPositions[side] = {}
     data.MizukiLockedCannonAims[side] = Vector(direction.X, direction.Y)
     data.MizukiActiveBeams[side] = {}
+    local shotTearScale = nil
     for member, origin in ipairs(origins) do
         data.MizukiLockedCannonPositions[side][member] = Vector(origin.X, origin.Y)
         local firingCannon = data.MizukiCannons[side]
@@ -519,6 +547,13 @@ local function fireMizukiBeam(player, direction, charge)
             1,
             nil
         )
+        local scaleParams = player:GetTearHitParams(
+            WeaponType.WEAPON_TEARS,
+            chargeDamageMultiplier,
+            1,
+            nil
+        )
+        shotTearScale = shotTearScale or scaleParams.TearScale
         local laser = EntityLaser.ShootAngle(
             MIZUKI_LASER_VARIANT,
             origin,
@@ -533,12 +568,12 @@ local function fireMizukiBeam(player, direction, charge)
         laser.CollisionDamage = tearParams.TearDamage
         laser.TearFlags = tearParams.TearFlags
         laser.Color = MIZUKI_LASER_COLOR
-        -- The native laser initializes Size during its first updates. Store
-        -- the desired width here and apply only Size from the update callback,
-        -- so we can verify whether this variant synchronizes its own visuals.
+        -- The native laser initializes its geometry during its first updates;
+        -- store the two independent width inputs for the update callback.
         laser:GetData().MizukiBeam = true
         laser:GetData().MizukiBeamOwner = player
         laser:GetData().MizukiBeamWidthScale = beamWidthScale
+        laser:GetData().MizukiBeamTearScale = scaleParams.TearScale
 
         local beam = {
             Laser = laser,
@@ -548,10 +583,14 @@ local function fireMizukiBeam(player, direction, charge)
             Timeout = beamDuration,
             Duration = beamDuration,
             DamageMultiplier = damageMultiplier,
+            ScaleDamageMultiplier = chargeDamageMultiplier,
         }
         table.insert(data.MizukiActiveBeams[side], beam)
     end
 
+    if shotTearScale then
+        replaceNativeTechnologyShotSound(shotTearScale)
+    end
 end
 
 function Mizuki:UpdateWeapon(player)
@@ -636,16 +675,21 @@ function Mizuki:ApplyLaserWidth(laser)
     local widthScale = laserData.MizukiBeamWidthScale or 1
     if not laserData.MizukiBeamWidthApplied then
         -- Wait until the native laser has initialized both its collision size
-        -- and render scale, then preserve that unmodified render baseline.
+        -- and render scale, then preserve those unmodified native baselines.
         laserData.MizukiBeamBaseSpriteScale = Vector(
             laser.SpriteScale.X,
             laser.SpriteScale.Y
         )
+        laserData.MizukiBeamBaseRadius = laser.Radius
         laser.Size = laser.Size * widthScale
         laserData.MizukiBeamWidthApplied = true
     end
 
     local baseScale = laserData.MizukiBeamBaseSpriteScale or Vector.One
+    local baseRadius = laserData.MizukiBeamBaseRadius or laser.Radius
+    -- GetTearHitParams has already combined damage-derived tear size and
+    -- independent size modifiers such as Tropicamide into TearScale.
+    laser.Radius = baseRadius * (laserData.MizukiBeamTearScale or 1)
     -- Size may synchronize back into SpriteScale during native updates. Undo
     -- its longitudinal scaling after every update: widen around the shared
     -- centered X pivot, while leaving body length and tip placement native.
@@ -721,9 +765,58 @@ function Mizuki:ApplyTearsMultiplier(player, cacheFlag)
             player:CheckFamiliar(Mizuki.CannonVariant, cannonsPerSide, rng, nil, 2)
         end
     end
+
+    if cacheFlag == CacheFlag.CACHE_DAMAGE and debugDamageOverride then
+        player.Damage = debugDamageOverride
+    end
 end
 
 Mizuki:AddCallback(ModCallbacks.MC_EVALUATE_CACHE, Mizuki.ApplyTearsMultiplier)
+
+local function refreshDebugDamageAndPrint()
+    local game = Game()
+    for index = 0, game:GetNumPlayers() - 1 do
+        local player = Isaac.GetPlayer(index)
+        player:AddCacheFlags(CacheFlag.CACHE_DAMAGE)
+        player:EvaluateItems()
+        local laserParams = player:GetTearHitParams(
+            WeaponType.WEAPON_TEARS,
+            1,
+            1,
+            nil
+        )
+        Isaac.ConsoleOutput(string.format(
+            "[Mizuki Tech Sound Test] player=%d damage=%.8f tearScale=%.8f\n",
+            index,
+            player.Damage,
+            laserParams.TearScale
+        ))
+    end
+end
+
+function Mizuki.SetDebugDamageOverride(requestedDamage)
+    if requestedDamage == nil or requestedDamage == false then
+        debugDamageOverride = nil
+        Isaac.ConsoleOutput("[Mizuki Tech Sound Test] damage override disabled\n")
+        refreshDebugDamageAndPrint()
+        return
+    end
+
+    requestedDamage = tonumber(requestedDamage)
+    if not requestedDamage or requestedDamage < 0 then
+        Isaac.ConsoleOutput(
+            "[Mizuki Tech Sound Test] usage: lua MizukiTestDamage(number|nil)\n"
+        )
+        return
+    end
+
+    debugDamageOverride = requestedDamage
+    refreshDebugDamageAndPrint()
+end
+
+-- Intentionally exposed only as a temporary debug-console entry point.
+MizukiTestDamage = Mizuki.SetDebugDamageOverride
+MizukiPrintTechSize = refreshDebugDamageAndPrint
 
 function Mizuki:InitCannonFamiliar(cannon)
     cannon.EntityCollisionClass = EntityCollisionClass.ENTCOLL_NONE
