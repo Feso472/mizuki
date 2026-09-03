@@ -3,7 +3,7 @@
     <card type="object"
           name="实验性胶囊"
           hud="Mizuki Experimental Capsule"
-          description="使用后转化为发光沙漏"
+          description="实验性胶囊？"
           pickup="9201"
           mimiccharge="12" />
 </pocketitems>

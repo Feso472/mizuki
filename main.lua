@@ -1,14 +1,50 @@
 local Mizuki = RegisterMod("Mizuki", 1)
 
--- Vanilla Repentance+ only. This weapon deliberately has no REPENTOGON APIs
--- and no EntityLaser dependency: Lua owns its hits, while a visual-only
--- EntityEffect lets the engine sort the beam beneath the cannon Familiars.
+-- Vanilla Repentance+ only. Mizuki's beam uses a native EntityLaser for
+-- collision, damage ticks and tear-effect compatibility. Lua still owns its
+-- charge cycle and keeps the laser anchored to the firing cannon position.
 Mizuki.PlayerType = Isaac.GetPlayerTypeByName("弥月", false)
 Mizuki.CannonVariant = Isaac.GetEntityVariantByName("Mizuki Cannon")
-Mizuki.BeamVisualVariant = Isaac.GetEntityVariantByName("Mizuki Beam Visual")
 Mizuki.ExperimentalCapsuleCard = Isaac.GetCardIdByName("Mizuki Experimental Capsule")
-
 local EXPERIMENTAL_CAPSULE_PICKUP_SUBTYPE = 9201
+
+-- Present the capsule as an ordinary Experimental Pill. Register after the
+-- game starts because EID rebuilds its icon tables during its own startup.
+local function registerExperimentalCapsuleEID()
+    if not EID or not EID.addCard or not EID.addIcon then
+        return
+    end
+
+    EID:addCard(
+        Mizuki.ExperimentalCapsuleCard,
+        "↑ 随机提升1项属性#↓ 随机降低1项属性",
+        "实验性胶囊",
+        "zh_cn"
+    )
+    EID:addCard(
+        Mizuki.ExperimentalCapsuleCard,
+        "↑ Increases 1 random stat#↓ Decreases 1 random stat",
+        "Experimental Pill",
+        "en_us"
+    )
+
+    local capsuleEIDIcon = Sprite()
+    capsuleEIDIcon:Load("gfx/items/mizuki/experimental_capsule.anm2", true)
+    capsuleEIDIcon:Play("EID", true)
+    EID:addIcon(
+        "Card" .. Mizuki.ExperimentalCapsuleCard,
+        "EID",
+        0,
+        9,
+        8,
+        0,
+        1,
+        capsuleEIDIcon
+    )
+end
+
+Mizuki:AddCallback(ModCallbacks.MC_POST_GAME_STARTED, registerExperimentalCapsuleEID)
+
 local GLOWING_HOUR_GLASS = CollectibleType.COLLECTIBLE_GLOWING_HOUR_GLASS
 local HOUR_GLASS = CollectibleType.COLLECTIBLE_HOURGLASS
 local BOX_OF_FRIENDS = CollectibleType.COLLECTIBLE_BOX_OF_FRIENDS
@@ -27,28 +63,27 @@ local BEAM_DISTANCE = 240
 -- Mizuki begins at HUD Range 6.50, which is internal TearRange 260.
 -- Its baseline beam length is anchored to that starting stat.
 local BASE_TEAR_RANGE = 260
-local BEAM_WIDTH_SCALE = 1.00
--- During the final frames, visually collapse the beam sideways like
--- Revelation's ending beam. This does not shorten its damage lifetime.
-local BEAM_END_NARROW_FRAMES = 8
-local BEAM_LIGHT_UP_FRAMES = 5
-local BEAM_VISUAL_DEPTH_OFFSET = 0
-local BEAM_START_LENGTH = 12
-local BEAM_END_LENGTH = 16
-local BEAM_BODY_TEXTURE_HEIGHT = 64
-local BEAM_END_TEXTURE_HEIGHT = 16
+local MIN_BEAM_WIDTH_SCALE = 0.75
+local MAX_BEAM_WIDTH_SCALE = 5.00
 local BEAM_DAMAGE_INTERVAL = 5
-local BEAM_DAMAGE_TICKS = 8
+-- A 42-frame native Technology beam lands 20 damage ticks in current tests.
+-- Each full-charge tick deals 0.4x damage, capping one complete beam at 8x.
+local BEAM_DURATION = 42
+local BEAM_DAMAGE_PER_TICK_MULTIPLIER = 0.40
+-- Mizuki charges manually, then releases a sustained native Technology laser.
+-- Variant 2 supplies real curved-laser collision and native tear interactions.
+local MIZUKI_LASER_VARIANT = 2
 local MIN_CHARGE_DAMAGE_MULTIPLIER = 0.45
--- The temporary beam art is 32 px wide at 1.0 scale, so its hit line uses
--- the matching 16 px half-width.
-local BEAM_HIT_RADIUS = 16
-local LASER_KNOCKBACK_BASE = 1.8
-local LASER_KNOCKBACK_ENHANCED_BASE = 3.6
-local DEFAULT_PROJECTILE_MASS = 2
--- Strong knockback is a separate one-time impulse, not a multiplier on the
--- beam's continuous push. This is intentionally isolated for later tuning.
-local LASER_PUNCH_IMPULSE = 12
+local MIZUKI_LASER_COLOR = Color(1, 1, 1, 1, 0, 0, 0)
+-- Colorize first converts the source to grayscale. The Technology texture is
+-- primarily pure red, whose grayscale luminance is roughly one third, so the
+-- requested capsule RGB needs extra brightness compensation.
+MIZUKI_LASER_COLOR:SetColorize(
+    5 * 246 / 255,
+    5 * 171 / 255,
+    5 * 180 / 255,
+    1
+)
 
 local CANNON_ANM2 = "gfx/entities/mizuki/mizuki_cannon.anm2"
 local LEFT_CANNON_SPRITESHEET = "gfx/entities/mizuki/mizuki_cannon_left.png"
@@ -58,6 +93,7 @@ local CANNON_SCALES = {
     Vector(0.65, 0.65),
 }
 local CANNON_DEPTH_OFFSET = 70
+local FIRING_CANNON_DEPTH_OFFSET = 70
 local HORIZONTAL_BACK_DEPTH_OFFSET = -70
 local HORIZONTAL_FRONT_DEPTH_OFFSET = 70
 local CHARGE_BAR_SCALE = Vector(0.5, 0.5)
@@ -81,7 +117,6 @@ local CANNON_IDLE_ROTATION_PIVOT = Vector(0, 10)
 local CHARGE_BAR_COLOR = Color(1, 1, 1, 1, 1, 1, 1)
 local chargeBar = Sprite()
 chargeBar:Load("gfx/chargebar_revelation.anm2", true)
-local sfx = SFXManager()
 
 local function isMizuki(player)
     return player:GetPlayerType() == Mizuki.PlayerType
@@ -138,6 +173,18 @@ end
 -- At Mizuki's starting HUD Range 6.50 (internal TearRange 260), its length is exactly 240 px.
 local function getBeamDistance(player)
     return math.max(40, BEAM_DISTANCE * player.TearRange / BASE_TEAR_RANGE)
+end
+
+-- Convert the final ShotSpeed stat into real beam thickness. At the normal
+-- 1.0 stat the laser keeps its native width; at 2.0 it reaches exactly 3x,
+-- then approaches (but never exceeds) 5x for extreme combinations.
+local function getBeamWidthScale(player)
+    local shotSpeedOffset = player.ShotSpeed - 1
+    local widthScale = 1
+        + (MAX_BEAM_WIDTH_SCALE - 1)
+        * (2 / math.pi)
+        * math.atan(shotSpeedOffset)
+    return math.max(widthScale, MIN_BEAM_WIDTH_SCALE)
 end
 
 -- Weapon-specific fire-rate profiles live here.  A profile first removes the
@@ -274,230 +321,6 @@ local function reconcilePlayerCannons(player, data)
     data.MizukiCannons = retained
 end
 
-local function createBeamSprite(animation)
-    local sprite = Sprite()
-    sprite:Load("gfx/entities/mizuki/mizuki_beam_visual.anm2", true)
-    sprite:Play(animation, true)
-    return sprite
-end
-
-local function createBeamVisuals()
-    return {
-        Start = createBeamSprite("Start"),
-        Body = createBeamSprite("Body"),
-        End = createBeamSprite("End"),
-    }
-end
-
-local function removeBeamVisuals(beam)
-    beam.Visuals = nil
-end
-
-local function getBeamVisualState(beam)
-    local rotation = beam.Direction:GetAngleDegrees() - 90
-
-    local endNarrowProgress = math.min(beam.Timeout / BEAM_END_NARROW_FRAMES, 1)
-    local endWidthScale = endNarrowProgress * endNarrowProgress
-        * (3 - 2 * endNarrowProgress)
-
-    local elapsedFrames = beam.Duration - beam.Timeout
-    local progress = math.min(elapsedFrames / BEAM_LIGHT_UP_FRAMES, 1)
-    local alpha = 0.5 + 0.25 * math.sin(progress * math.pi / 2)
-
-    return rotation, endWidthScale, Color(1, 1, 1, alpha, 0, 0, 0)
-end
-
-local function updateBeamVisual(beam)
-    if not beam.Visuals then
-        return
-    end
-
-    beam.Visuals.Start:Update()
-    beam.Visuals.Body:Update()
-    beam.Visuals.End:Update()
-end
-
-local function renderBeamVisual(beam)
-    local visuals = beam.Visuals
-    if not visuals then
-        return
-    end
-
-    local rotation, endWidthScale, color = getBeamVisualState(beam)
-    local widthScale = BEAM_WIDTH_SCALE * endWidthScale
-
-    local startSprite = visuals.Start
-    startSprite.Rotation = rotation
-    startSprite.Scale = Vector(widthScale, 1)
-    startSprite.Color = color
-
-    local startScreen = Isaac.WorldToScreen(beam.Origin)
-    local endWorld = beam.Origin + beam.Direction * beam.Distance
-    local endScreen = Isaac.WorldToScreen(endWorld)
-    local visualLength = (endScreen - startScreen):Length()
-
-    local remainingLength = math.max(
-        visualLength - BEAM_START_LENGTH,
-        0
-    )
-    local endLength = math.min(BEAM_END_LENGTH, remainingLength)
-    local bodyLength = math.max(
-        remainingLength - endLength,
-        0
-    )
-
-    local bodySprite = visuals.Body
-    bodySprite.Rotation = rotation
-    bodySprite.Scale = Vector(
-        widthScale,
-        bodyLength / BEAM_BODY_TEXTURE_HEIGHT
-    )
-    bodySprite.Color = color
-
-    local endSprite = visuals.End
-    endSprite.Rotation = rotation
-    endSprite.Scale = Vector(
-        widthScale,
-        endLength / BEAM_END_TEXTURE_HEIGHT
-    )
-    endSprite.Color = color
-
-    -- Everything after WorldToScreen() is measured in screen pixels:
-    -- 12 px Start, stretched Body, then a fixed 16 px fading End.
-    local bodyScreen = startScreen + beam.Direction * BEAM_START_LENGTH
-    local endScreen = startScreen
-        + beam.Direction * (visualLength - endLength)
-
-    startSprite:Render(startScreen)
-    if bodyLength > 0 then
-        bodySprite:Render(bodyScreen)
-    end
-    if endLength > 0 then
-        endSprite:Render(endScreen)
-    end
-end
-
-local function hasTearFlag(flags, flag)
-    return (flags & flag) ~= 0
-end
-
-local function buildBeamKnockbackProfile(player)
-    -- Read item-provided flags from the normal tear profile. The Brimstone
-    -- profile has inherent flags of its own, which would make every Mizuki
-    -- beam look externally enhanced even with no knockback items.
-    local params = player:GetTearHitParams(WeaponType.WEAPON_TEARS, 1, 1, nil)
-    local flags = params.TearFlags
-    local mass = DEFAULT_PROJECTILE_MASS
-
-    -- Almond Milk overrides Soy Milk in vanilla rather than stacking with it.
-    if player:HasCollectible(CollectibleType.COLLECTIBLE_ALMOND_MILK) then
-        mass = mass * 0.3
-    elseif player:HasCollectible(CollectibleType.COLLECTIBLE_SOY_MILK) then
-        mass = mass * 0.2
-    end
-
-    return {
-        Mass = mass,
-        Enhanced = hasTearFlag(flags, TearFlags.TEAR_KNOCKBACK),
-        Punch = hasTearFlag(flags, TearFlags.TEAR_PUNCH),
-        TearFlags = flags,
-    }
-end
-
-local function getBeamPush(entity, profile)
-    local targetMass = math.max(entity.Mass or 1, 0.001)
-    local coefficient = profile.Enhanced
-        and LASER_KNOCKBACK_ENHANCED_BASE
-        or LASER_KNOCKBACK_BASE
-    return coefficient * profile.Mass / targetMass
-end
-
-local function applyBeamKnockback(entity, beam)
-    local profile = beam.Knockback
-    entity:AddVelocity(beam.Direction * getBeamPush(entity, profile))
-
-    if profile.Punch and not beam.PunchedTargets[entity.InitSeed] then
-        beam.PunchedTargets[entity.InitSeed] = true
-        local targetMass = math.max(entity.Mass or 1, 0.001)
-        local impulse = LASER_PUNCH_IMPULSE * profile.Mass / targetMass
-        entity:AddVelocity(beam.Direction * impulse)
-    end
-end
-
-local function pointToSegmentDistance(point, origin, direction, length)
-    local relative = point - origin
-    local along = math.max(0, math.min(length, relative.X * direction.X + relative.Y * direction.Y))
-    return (point - (origin + direction * along)):Length()
-end
-
-local function damageBeamTargets(player, beam)
-    local frame = Game():GetFrameCount()
-    local beamDistance = beam.Distance
-    for _, entity in ipairs(Isaac.GetRoomEntities()) do
-        local npc = entity:ToNPC()
-        local isEnemy = npc and npc:IsActiveEnemy(false)
-        -- These are the non-enemy, entity-based targets that normal laser
-        -- weapons can damage. Fixed poops and TNT are handled as GridEntities
-        -- below, so both room representations are covered.
-        local isLaserDestructible = entity.Type == EntityType.ENTITY_FIREPLACE
-            or entity.Type == EntityType.ENTITY_POOP
-            or entity.Type == EntityType.ENTITY_MOVABLE_TNT
-        local intersectsBeam = pointToSegmentDistance(
-            entity.Position,
-            beam.Origin,
-            beam.Direction,
-            beamDistance
-        ) <= entity.Size + BEAM_HIT_RADIUS
-
-        if intersectsBeam then
-            -- Knockback is continuous like a sustained laser: enemies and bombs
-            -- receive a small velocity impulse every frame while inside the beam.
-            if entity.Type == EntityType.ENTITY_BOMB or isEnemy then
-                applyBeamKnockback(entity, beam)
-            end
-
-            -- Damage remains throttled independently at the normal beam tick rate.
-            local lastHit = beam.LastHitFrames[entity.InitSeed] or -BEAM_DAMAGE_INTERVAL
-            if frame - lastHit >= BEAM_DAMAGE_INTERVAL then
-                if entity.Type == EntityType.ENTITY_BOMB then
-                    beam.LastHitFrames[entity.InitSeed] = frame
-                elseif isEnemy or isLaserDestructible then
-                    entity:TakeDamage(
-                        player.Damage * beam.DamageMultiplier,
-                        DamageFlag.DAMAGE_LASER,
-                        EntityRef(player),
-                        0
-                    )
-
-                    beam.LastHitFrames[entity.InitSeed] = frame
-                end
-            end
-        end
-    end
-
-    -- Grid poops and fixed TNT barrels are not entities. Give them the same
-    -- damage cadence as entity targets instead of hurting them every frame.
-    beam.LastGridHitFrames = beam.LastGridHitFrames or {}
-    local room = Game():GetRoom()
-    for gridIndex = 0, room:GetGridSize() - 1 do
-        local grid = room:GetGridEntity(gridIndex)
-        if grid then
-            local gridType = grid:GetType()
-            local isLaserDestructibleGrid = gridType == GridEntityType.GRID_POOP
-                or gridType == GridEntityType.GRID_TNT
-                or gridType == GridEntityType.GRID_FIREPLACE
-            if isLaserDestructibleGrid
-                and pointToSegmentDistance(grid.Position, beam.Origin, beam.Direction, beamDistance) <= BEAM_HIT_RADIUS + 20 then
-                local lastHit = beam.LastGridHitFrames[gridIndex] or -BEAM_DAMAGE_INTERVAL
-                if frame - lastHit >= BEAM_DAMAGE_INTERVAL then
-                    grid:Hurt(1)
-                    beam.LastGridHitFrames[gridIndex] = frame
-                end
-            end
-        end
-    end
-end
-
 local function updateActiveBeams(player, data)
     data.MizukiActiveBeams = data.MizukiActiveBeams or {}
     local activeSides = 0
@@ -506,13 +329,35 @@ local function updateActiveBeams(player, data)
         if beams and #beams > 0 then
             local expired = false
             for _, beam in ipairs(beams) do
+                local laser = beam.Laser
                 beam.Timeout = beam.Timeout - 1
-                if beam.Timeout <= 0 then
-                    removeBeamVisuals(beam)
+                if beam.Timeout <= 0 or not laser or not laser:Exists() then
+                    if laser and laser:Exists() then
+                        laser:Remove()
+                    end
                     expired = true
                 else
-                    updateBeamVisual(beam)
-                    damageBeamTargets(player, beam)
+                    -- ShootAngle initially receives the player as its damage
+                    -- owner, but the beam itself must stay at the captured
+                    -- cannon position for its entire lifetime.
+                    laser.Position = beam.Origin
+                    laser.Velocity = Vector.Zero
+                    laser:SetMaxDistance(beam.Distance)
+
+                    -- Refresh at the beam's damage cadence. This lets native
+                    -- laser-context random effects (notably Fruit Cake)
+                    -- change during a sustained shot without rerolling every
+                    -- render frame.
+                    if beam.Timeout % BEAM_DAMAGE_INTERVAL == 0 then
+                        local params = player:GetTearHitParams(
+                            WeaponType.WEAPON_LASER,
+                            beam.DamageMultiplier,
+                            1,
+                            laser
+                        )
+                        laser.TearFlags = params.TearFlags
+                        laser.CollisionDamage = params.TearDamage
+                    end
                 end
             end
 
@@ -579,7 +424,12 @@ local function updateCannonPositions(player, data)
                 cannon.Position = cannon.Position + (floatingTarget - cannon.Position) * CANNON_FOLLOW_SPEED
             end
             cannon.Velocity = Vector.Zero
-            if isHorizontal then
+            if isFiring then
+                -- Keep the firing group decisively above the native laser;
+                -- depth zero can alternate around Technology's moving render
+                -- position as the beam animates.
+                cannon.DepthOffset = FIRING_CANNON_DEPTH_OFFSET
+            elseif isHorizontal then
                 cannon.DepthOffset = side == 2
                     and HORIZONTAL_FRONT_DEPTH_OFFSET
                     or HORIZONTAL_BACK_DEPTH_OFFSET
@@ -643,37 +493,65 @@ local function fireMizukiBeam(player, direction, charge)
         return
     end
     local beamDistance = getBeamDistance(player)
-    -- Fixed eight damage events; at this interval, 40 frames keeps the beam
-    -- alive long enough for the eighth event to occur.
-    local beamDuration = BEAM_DAMAGE_TICKS * BEAM_DAMAGE_INTERVAL
+    local beamWidthScale = getBeamWidthScale(player)
+    local beamDuration = BEAM_DURATION
     local chargePercent = math.min(charge / getMaxChargeFrames(player), 1)
     local normalizedCharge = math.max(0, (chargePercent - MIN_CHARGE_PERCENT) / (1 - MIN_CHARGE_PERCENT))
-    local damageMultiplier = MIN_CHARGE_DAMAGE_MULTIPLIER
+    local chargeDamageMultiplier = MIN_CHARGE_DAMAGE_MULTIPLIER
         + (1 - MIN_CHARGE_DAMAGE_MULTIPLIER) * normalizedCharge
-    local knockbackProfile = buildBeamKnockbackProfile(player)
+    local damageMultiplier = BEAM_DAMAGE_PER_TICK_MULTIPLIER
+        * chargeDamageMultiplier
     data.MizukiLockedCannonPositions[side] = {}
     data.MizukiLockedCannonAims[side] = Vector(direction.X, direction.Y)
     data.MizukiActiveBeams[side] = {}
     for member, origin in ipairs(origins) do
         data.MizukiLockedCannonPositions[side][member] = Vector(origin.X, origin.Y)
+        local firingCannon = data.MizukiCannons[side]
+            and data.MizukiCannons[side][member]
+        if firingCannon and firingCannon:Exists() then
+            -- Apply the firing depth before this frame is rendered; waiting
+            -- for the next Familiar update would leave a one-frame layer pop.
+            firingCannon.DepthOffset = FIRING_CANNON_DEPTH_OFFSET
+        end
+        local tearParams = player:GetTearHitParams(
+            WeaponType.WEAPON_LASER,
+            damageMultiplier,
+            1,
+            nil
+        )
+        local laser = EntityLaser.ShootAngle(
+            MIZUKI_LASER_VARIANT,
+            origin,
+            direction:GetAngleDegrees(),
+            beamDuration,
+            Vector.Zero,
+            player
+        )
+        laser.DisableFollowParent = true
+        laser:SetOneHit(false)
+        laser:SetMaxDistance(beamDistance)
+        laser.CollisionDamage = tearParams.TearDamage
+        laser.TearFlags = tearParams.TearFlags
+        laser.Color = MIZUKI_LASER_COLOR
+        -- The native laser initializes Size during its first updates. Store
+        -- the desired width here and apply only Size from the update callback,
+        -- so we can verify whether this variant synchronizes its own visuals.
+        laser:GetData().MizukiBeam = true
+        laser:GetData().MizukiBeamOwner = player
+        laser:GetData().MizukiBeamWidthScale = beamWidthScale
+
         local beam = {
+            Laser = laser,
             Origin = Vector(origin.X, origin.Y),
             Direction = Vector(direction.X, direction.Y),
             Distance = beamDistance,
             Timeout = beamDuration,
             Duration = beamDuration,
-            LastHitFrames = {},
-            LastGridHitFrames = {},
             DamageMultiplier = damageMultiplier,
-            Knockback = knockbackProfile,
-            PunchedTargets = {},
         }
-        beam.Visuals = createBeamVisuals()
-        updateBeamVisual(beam)
         table.insert(data.MizukiActiveBeams[side], beam)
     end
 
-    sfx:Play(SoundEffect.SOUND_ANGEL_BEAM, 0.8, 0, false, 1)
 end
 
 function Mizuki:UpdateWeapon(player)
@@ -690,6 +568,17 @@ function Mizuki:UpdateWeapon(player)
 
     local data = player:GetData()
     updateCannonReconcile(player, data)
+
+    if data.MizukiBoxFallbackDemonBabyEffects ~= nil then
+        local effects = player:GetEffects()
+        local targetCount = data.MizukiBoxFallbackDemonBabyEffects
+        data.MizukiBoxFallbackDemonBabyEffects = nil
+        while effects:GetCollectibleEffectNum(CollectibleType.COLLECTIBLE_DEMON_BABY) > targetCount do
+            effects:RemoveCollectibleEffect(CollectibleType.COLLECTIBLE_DEMON_BABY)
+        end
+        player:AddCacheFlags(CacheFlag.CACHE_FAMILIARS)
+        player:EvaluateItems()
+    end
 
     if data.MizukiRefreshCannonCache then
         data.MizukiRefreshCannonCache = nil
@@ -736,29 +625,54 @@ function Mizuki:UpdateWeapon(player)
     data.MizukiCannonAim = Vector(0, -1)
 end
 
-function Mizuki:RenderCustomBeams()
-    for playerIndex = 0, Game():GetNumPlayers() - 1 do
-        local player = Isaac.GetPlayer(playerIndex)
-        if isMizuki(player) then
-            local activeBeams = player:GetData().MizukiActiveBeams
-            if activeBeams then
-                for side = 1, 2 do
-                    local beams = activeBeams[side]
-                    if beams then
-                        for _, beam in ipairs(beams) do
-                            if beam.Timeout > 0 and beam.Visuals then
-                                renderBeamVisual(beam)
-                            end
-                        end
-                    end
-                end
-            end
-        end
+Mizuki:AddCallback(ModCallbacks.MC_POST_PEFFECT_UPDATE, Mizuki.UpdateWeapon)
+
+function Mizuki:ApplyLaserWidth(laser)
+    local laserData = laser:GetData()
+    if not laserData.MizukiBeam or laser.FrameCount < 2 then
+        return
+    end
+
+    local widthScale = laserData.MizukiBeamWidthScale or 1
+    if not laserData.MizukiBeamWidthApplied then
+        -- Wait until the native laser has initialized both its collision size
+        -- and render scale, then preserve that unmodified render baseline.
+        laserData.MizukiBeamBaseSpriteScale = Vector(
+            laser.SpriteScale.X,
+            laser.SpriteScale.Y
+        )
+        laser.Size = laser.Size * widthScale
+        laserData.MizukiBeamWidthApplied = true
+    end
+
+    local baseScale = laserData.MizukiBeamBaseSpriteScale or Vector.One
+    -- Size may synchronize back into SpriteScale during native updates. Undo
+    -- its longitudinal scaling after every update: widen around the shared
+    -- centered X pivot, while leaving body length and tip placement native.
+    laser.SpriteScale = Vector(
+        baseScale.X * widthScale,
+        baseScale.Y
+    )
+end
+
+Mizuki:AddCallback(
+    ModCallbacks.MC_POST_LASER_UPDATE,
+    Mizuki.ApplyLaserWidth,
+    MIZUKI_LASER_VARIANT
+)
+
+function Mizuki:RememberBoxOfFriendsDemonBabyEffects(collectible, rng, player)
+    if isMizuki(player) and player:GetCollectibleNum(CollectibleType.COLLECTIBLE_DEMON_BABY) == 0 then
+        player:GetData().MizukiBoxFallbackDemonBabyEffects =
+            player:GetEffects():GetCollectibleEffectNum(CollectibleType.COLLECTIBLE_DEMON_BABY)
     end
 end
 
-Mizuki:AddCallback(ModCallbacks.MC_POST_PEFFECT_UPDATE, Mizuki.UpdateWeapon)
-Mizuki:AddCallback(ModCallbacks.MC_POST_RENDER, Mizuki.RenderCustomBeams)
+Mizuki:AddCallback(
+    ModCallbacks.MC_PRE_USE_ITEM,
+    Mizuki.RememberBoxOfFriendsDemonBabyEffects,
+    BOX_OF_FRIENDS
+)
 
 function Mizuki:QueueBoxOfFriendsCannonRefresh(collectible, rng, player)
     if isMizuki(player) then
