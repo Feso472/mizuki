@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<items gfxroot="gfx/items/" version="1">
+    <!-- Internal character item: quest keeps it out of rerolls; omitting
+         uniquefamiliar intentionally allows Box of Friends to copy it. -->
+    <familiar name="Mizuki Fan"
+              description="A devoted supporter"
+              gfx="mizuki/mizuki_fan.png"
+              cache="familiars"
+              quality="0"
+              hidden="true"
+              tags="quest" />
+</items>

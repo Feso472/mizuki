@@ -30,4 +30,19 @@
             numGridCollisionPoints="24"
             shadowSize="16"
             stageHP="0" />
+    <entity name="Mizuki Fan Familiar"
+            anm2path="entities/mizuki/xbt.anm2"
+            id="3"
+            variant="9202"
+            subtype="0"
+            baseHP="0"
+            boss="0"
+            champion="0"
+            collisionDamage="0"
+            collisionMass="0"
+            collisionRadius="10"
+            friction="1"
+            numGridCollisionPoints="0"
+            shadowSize="10"
+            stageHP="0" />
 </entities>
