@@ -4,6 +4,15 @@
 *.tmp
 *~
 
+# Local Codex guidance and archived experiments
+AGENTS.md
+dev_backups/
+tools/
+
+# Editable sprite source files; exported game assets stay tracked
+*.ase
+*.aseprite
+
 # OS metadata
 Thumbs.db
 .DS_Store
