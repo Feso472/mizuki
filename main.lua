@@ -145,12 +145,24 @@ local CANNON_GROUP_SPACING = 16
 local HORIZONTAL_CANNON_X = 10
 -- Horizontal pair sits close to Isaac's normal tear-launch height.
 local HORIZONTAL_CANNON_CENTER_Y = -22.5
-local HORIZONTAL_CANNON_HALF_SPACING = 2.5
+local HORIZONTAL_CANNON_HALF_SPACING = 3
 local CANNON_FOLLOW_SPEED = 0.22
 local CANNON_FLOAT_AMPLITUDE = 2
+local CANNON_FLOAT_PERIOD = 45
 local LEFT_CANNON_IDLE_ROTATION = -55
-local RIGHT_CANNON_IDLE_ROTATION = -5
+local RIGHT_CANNON_IDLE_ROTATION = -10
+local LEFT_CANNON_IDLE_OUTER_ROTATION = -65
+local RIGHT_CANNON_IDLE_OUTER_ROTATION = 0
+-- The configured idle rotations above are the inward end of the motion. Over
+-- five seconds at 30 logical frames per second, the pair opens to -65 / 5 and
+-- returns. Cosine position produces sinusoidal speed: fastest halfway through
+-- each stroke and smoothly slowing to zero at both ends.
+local CANNON_IDLE_SWING_PERIOD = 150
 local CANNON_ROTATION_RETURN_SPEED = 0.18
+Mizuki.LUDOVICO_CANNON_ORBIT_PADDING = 14
+Mizuki.LUDOVICO_CANNON_ORBIT_DEGREES_PER_FRAME = 3
+Mizuki.LUDOVICO_CANNON_DAMAGE_MULTIPLIER = 3
+Mizuki.LUDOVICO_CANNON_MIN_HIT_RADIUS = 10
 -- The decorative idle turn pivots around the cannon sprite's bottom centre,
 -- while its Familiar entity (and therefore the beam origin) stays fixed.
 local CANNON_IDLE_ROTATION_PIVOT = Vector(0, 10)
@@ -436,6 +448,92 @@ local SHOOT_ACTIONS = {
     { Action = ButtonAction.ACTION_SHOOTUP, Direction = Vector(0, -1) },
     { Action = ButtonAction.ACTION_SHOOTDOWN, Direction = Vector(0, 1) },
 }
+
+local LUDOVICO_FACE_INPUT = 0.01
+local readingRawLudovicoInput = false
+
+local function getRawShootingInput(player)
+    readingRawLudovicoInput = true
+    local controller = player.ControllerIndex
+    local input = Vector(
+        Input.GetActionValue(ButtonAction.ACTION_SHOOTRIGHT, controller)
+            - Input.GetActionValue(ButtonAction.ACTION_SHOOTLEFT, controller),
+        Input.GetActionValue(ButtonAction.ACTION_SHOOTDOWN, controller)
+            - Input.GetActionValue(ButtonAction.ACTION_SHOOTUP, controller)
+    )
+    readingRawLudovicoInput = false
+    return input
+end
+
+local function hasRawShootingInput(player)
+    local input = getRawShootingInput(player)
+    if input:Length() > 0.01 then
+        return true
+    end
+    return Options.MouseControl
+        and player.ControllerIndex == 0
+        and player:AreControlsEnabled()
+        and Input.IsMouseBtnPressed(0)
+end
+
+-- While shooting, Ludovico makes the player look at its controlled tear instead
+-- of at the pressed shooting direction. Mizuki is blindfolded, so provide only
+-- the tiny directional value needed by the player animation. Ring movement reads
+-- the physical controls separately through getRawShootingInput.
+function Mizuki:FaceLudovicoRing(entity, inputHook, buttonAction)
+    if readingRawLudovicoInput then return end
+    if inputHook ~= InputHook.GET_ACTION_VALUE
+        and inputHook ~= InputHook.IS_ACTION_PRESSED
+    then
+        return
+    end
+
+    local player = entity and entity:ToPlayer()
+    if not player or not isMizuki(player) then return end
+
+    local ring = player:GetData().MizukiLudovicoTechXProbe
+    if not ring or not ring:Exists() then return end
+    if not hasRawShootingInput(player) then return end
+
+    local offset = ring.Position - player.Position
+    if offset:Length() <= 0.01 then return end
+
+    local facingAction
+    if math.abs(offset.X) > math.abs(offset.Y) then
+        facingAction = offset.X < 0
+            and ButtonAction.ACTION_SHOOTLEFT
+            or ButtonAction.ACTION_SHOOTRIGHT
+    else
+        facingAction = offset.Y < 0
+            and ButtonAction.ACTION_SHOOTUP
+            or ButtonAction.ACTION_SHOOTDOWN
+    end
+
+    local isShootAction = false
+    for _, input in ipairs(SHOOT_ACTIONS) do
+        if buttonAction == input.Action then
+            isShootAction = true
+            break
+        end
+    end
+    if not isShootAction then return end
+
+    if inputHook == InputHook.IS_ACTION_PRESSED then
+        return buttonAction == facingAction
+    end
+    return buttonAction == facingAction and LUDOVICO_FACE_INPUT or 0
+end
+
+Mizuki:AddCallback(
+    ModCallbacks.MC_INPUT_ACTION,
+    Mizuki.FaceLudovicoRing,
+    InputHook.GET_ACTION_VALUE
+)
+Mizuki:AddCallback(
+    ModCallbacks.MC_INPUT_ACTION,
+    Mizuki.FaceLudovicoRing,
+    InputHook.IS_ACTION_PRESSED
+)
 
 local function getMizukiTargetReticle(player, data)
     local target = data.MizukiTargetReticle
@@ -1134,7 +1232,11 @@ local function updateCannonPositions(player, data)
             local isIdle = not data.MizukiHasShootingInput
                 and (data.MizukiCharge or 0) <= 0
                 and not anyCannonFiring
-            local bobOffset = Vector(0, math.sin(frame * 0.16) * CANNON_FLOAT_AMPLITUDE)
+            local bobOffset = Vector(
+                0,
+                math.sin(frame * 2 * math.pi / CANNON_FLOAT_PERIOD)
+                    * CANNON_FLOAT_AMPLITUDE
+            )
             local idleHeightOffset = isIdle and CANNON_IDLE_OFFSETS or Vector.Zero
             if isFiring and not isFollowingFiring then
                 -- targetPosition is the exact world position captured on the
@@ -1167,7 +1269,10 @@ local function updateCannonPositions(player, data)
             local cannonAim = lockedCannonAim
                 or data.MizukiCannonAim or Vector(0, -1)
             local cannonData = cannon:GetData()
+            cannon.Visible = true
             cannonData.CannonSide = side
+            cannonData.MizukiRenderWorldOffset = nil
+            cannonData.MizukiLudovicoOrbiting = nil
             -- Read by Mizuki:RenderCannon to pick the resting or firing
             -- reflection distance and mirroring.
             cannonData.MizukiIsIdle = isIdle
@@ -1207,6 +1312,25 @@ local function updateCannonPositions(player, data)
             -- cardinal direction with the locked firing rotation shifts the
             -- sprite around the wrong pivot.
             local idleRotation = cannonData.MizukiIdleRotationOffset
+            if isIdle then
+                local swingFrame = cannonData.MizukiIdleSwingFrame or 0
+                local swingProgress = (1 - math.cos(
+                    swingFrame * 2 * math.pi / CANNON_IDLE_SWING_PERIOD
+                )) * 0.5
+                local outerRotation = side == 1
+                    and LEFT_CANNON_IDLE_OUTER_ROTATION
+                    or RIGHT_CANNON_IDLE_OUTER_ROTATION
+                local inwardRotation = side == 1
+                    and LEFT_CANNON_IDLE_ROTATION
+                    or RIGHT_CANNON_IDLE_ROTATION
+                idleRotation = idleRotation
+                    + (outerRotation - inwardRotation) * swingProgress
+                cannonData.MizukiIdleSwingFrame =
+                    (swingFrame + 1) % CANNON_IDLE_SWING_PERIOD
+            else
+                -- Every new idle interval starts at the existing inward pose.
+                cannonData.MizukiIdleSwingFrame = nil
+            end
             local sprite = cannon:GetSprite()
             local target = getMizukiTargetReticle(player, data)
             local spritePositionAim = lockedPositionAim or positionAim
@@ -1852,6 +1976,249 @@ local function updateCursedEyeBurst(player, data)
     return true
 end
 
+local function removeLudovicoTechXProbe(data)
+    local ring = data.MizukiLudovicoTechXProbe
+    if ring and ring:Exists() then
+        ring:Remove()
+    end
+    local legacyCarrier = data.MizukiLudovicoCarrier
+    if legacyCarrier and legacyCarrier:Exists() then
+        legacyCarrier:Remove()
+    end
+    data.MizukiLudovicoTechXProbe = nil
+    data.MizukiLudovicoCarrier = nil
+    data.MizukiLudovicoProbeActive = nil
+    data.MizukiLudovicoCannonOrbitAngle = nil
+end
+
+function Mizuki.updateLudovicoCannons(player, data, ring)
+    prunePlayerCannons(data)
+    data.MizukiCannonPositions = { {}, {} }
+
+    local angle = data.MizukiLudovicoCannonOrbitAngle or -90
+    angle = (angle
+        + player.ShotSpeed
+            * Mizuki.LUDOVICO_CANNON_ORBIT_DEGREES_PER_FRAME) % 360
+    data.MizukiLudovicoCannonOrbitAngle = angle
+
+    local ringRadius = ring.Radius
+    if not ringRadius or ringRadius <= 0 then
+        ringRadius = 60
+    end
+    local ringData = ring:GetData()
+    local damageSchedules = ringData.MizukiLudovicoCannonDamageSchedules
+    if not damageSchedules then
+        damageSchedules = {}
+        ringData.MizukiLudovicoCannonDamageSchedules = damageSchedules
+    end
+
+    local frame = Game():GetFrameCount()
+    local damageInterval = math.max(player.MaxFireDelay, 1) + 1
+    -- Gameplay geometry follows the laser entity's collision centre. Render
+    -- offsets stay visual-only, matching the ring whose hitbox sits slightly
+    -- below its artwork.
+    local orbitCenter = ring.Position
+    for side = 1, 2 do
+        local orbitDirection = Vector.FromAngle(angle + (side - 1) * 180)
+        local tangentDirection = orbitDirection:Rotated(90)
+        for member, cannon in ipairs(data.MizukiCannons[side] or {}) do
+            if cannon and cannon:Exists() then
+                local orbitRadius = ringRadius
+                    + Mizuki.LUDOVICO_CANNON_ORBIT_PADDING
+                    + (member - 1) * CANNON_GROUP_SPACING
+                cannon.Position = orbitCenter
+                    + orbitDirection * orbitRadius
+                cannon.Velocity = Vector.Zero
+                -- Ludovico cannons are drawn explicitly after the laser ring.
+                -- Disable the Familiar's native body/shadow/reflection passes;
+                -- alpha alone can leave a second lower image flickering.
+                cannon.Visible = false
+                cannon.DepthOffset = orbitDirection.Y > 0
+                    and HORIZONTAL_FRONT_DEPTH_OFFSET
+                    or HORIZONTAL_BACK_DEPTH_OFFSET
+                local cannonData = cannon:GetData()
+                cannonData.CannonSide = side
+                cannonData.MizukiIsIdle = false
+                cannonData.MizukiLudovicoOrbiting = true
+                cannonData.MizukiIdleSwingFrame = nil
+                cannonData.MizukiIdleRotationOffset = 0
+                cannonData.MizukiReflectionSpan =
+                    CANNON_FIRING_REFLECTION_SPAN * player.SpriteScale.Y
+                cannonData.MizukiCannonAim = tangentDirection
+                cannonData.MizukiRenderWorldOffset = Vector(
+                    ring.PositionOffset.X,
+                    ring.PositionOffset.Y
+                )
+                cannonData.MizukiLayoutOffset = cannon.Position - player.Position
+
+                local sprite = cannon:GetSprite()
+                sprite.Rotation, sprite.Offset = getCannonSpriteTransform(
+                    tangentDirection,
+                    orbitDirection,
+                    0
+                )
+                sprite.Color = getCannonHiddenColor()
+                data.MizukiCannonPositions[side][member] = Vector(
+                    cannon.Position.X,
+                    cannon.Position.Y
+                )
+
+                local hitPosition = cannon.Position
+                local hitRadius = math.max(
+                    cannon.Size,
+                    Mizuki.LUDOVICO_CANNON_MIN_HIT_RADIUS
+                )
+                for _, enemy in ipairs(Isaac.FindInRadius(
+                    hitPosition,
+                    160,
+                    EntityPartition.ENEMY
+                )) do
+                    if enemy:IsVulnerableEnemy()
+                        and not enemy:HasEntityFlags(EntityFlag.FLAG_FRIENDLY)
+                        and enemy.Position:Distance(hitPosition)
+                            <= enemy.Size + hitRadius
+                    then
+                        local targetHash = GetPtrHash(enemy)
+                        local schedule = damageSchedules[targetHash]
+                        local canDamage = not schedule
+                        if schedule then
+                            if math.abs(schedule.Interval - damageInterval)
+                                > 0.0001
+                            then
+                                local remaining = math.max(
+                                    0,
+                                    schedule.NextFrame - frame
+                                )
+                                schedule.NextFrame = frame
+                                    + remaining * damageInterval
+                                        / schedule.Interval
+                                schedule.Interval = damageInterval
+                            end
+                            canDamage = frame + 0.0001 >= schedule.NextFrame
+                        end
+                        if canDamage then
+                            if not schedule then
+                                schedule = {
+                                    NextFrame = frame + damageInterval,
+                                    Interval = damageInterval,
+                                }
+                                damageSchedules[targetHash] = schedule
+                            else
+                                repeat
+                                    schedule.NextFrame = schedule.NextFrame
+                                        + damageInterval
+                                until schedule.NextFrame > frame
+                            end
+                            enemy:TakeDamage(
+                                player.Damage
+                                    * Mizuki.LUDOVICO_CANNON_DAMAGE_MULTIPLIER,
+                                0,
+                                EntityRef(cannon),
+                                0
+                            )
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- A normal player has a weapon controller which moves RING_LUDOVICO from the
+-- shooting input. Mizuki is blindfolded, so move the native Tech X ring directly
+-- without an intermediate tear carrier.
+local function updateLudovicoTechXProbe(player, data)
+    local hasLudovico = player:HasCollectible(
+        CollectibleType.COLLECTIBLE_LUDOVICO_TECHNIQUE
+    )
+    if not hasLudovico then
+        removeLudovicoTechXProbe(data)
+        data.MizukiLudovicoCollectibleCount = player:GetCollectibleCount()
+        return false
+    end
+
+    local collectibleCount = player:GetCollectibleCount()
+    local previousCollectibleCount = data.MizukiLudovicoCollectibleCount
+    data.MizukiLudovicoCollectibleCount = collectibleCount
+    if previousCollectibleCount
+        and collectibleCount > previousCollectibleCount
+    then
+        -- FireTechXLaser chooses synergies such as Brimstone only when the
+        -- entity is created. Recreate the stale ring at the player's current
+        -- position as soon as a new collectible enters the inventory.
+        local staleRing = data.MizukiLudovicoTechXProbe
+        if staleRing and staleRing:Exists() then
+            staleRing:Remove()
+        end
+        data.MizukiLudovicoTechXProbe = nil
+    end
+
+    -- Clean up a carrier left alive by reloading the previous probe version.
+    local legacyCarrier = data.MizukiLudovicoCarrier
+    if legacyCarrier and legacyCarrier:Exists() then
+        legacyCarrier:Remove()
+    end
+    data.MizukiLudovicoCarrier = nil
+
+    if not data.MizukiLudovicoProbeActive then
+        removeActiveMizukiBeams(data)
+        data.MizukiCharge = 0
+        data.MizukiAim = nil
+        data.MizukiChargeBarFullFrames = nil
+        data.MizukiCursedEyeBurst = nil
+        data.MizukiLudovicoProbeActive = true
+    end
+
+    local ring = data.MizukiLudovicoTechXProbe
+    if not ring or not ring:Exists() then
+        ring = player:FireTechXLaser(
+            player.Position,
+            Vector.Zero,
+            60,
+            player,
+            1
+        ):ToLaser()
+        -- Parent and RING_FOLLOW_PARENT are independent concerns. Subtype 1 is
+        -- the engine's Tech/Brim + Ludovico ring; subtype 3 is the kind used by
+        -- effects such as Maw of the Void and can discard the fire-ring visuals.
+        ring.SubType = LaserSubType.LASER_SUBTYPE_RING_LUDOVICO
+        ring:SetTimeout(-1)
+        local ringData = ring:GetData()
+        ringData.MizukiLudovicoTechXProbe = true
+        ringData.MizukiLudovicoOwner = player
+        data.MizukiLudovicoTechXProbe = ring
+    end
+    -- Also repairs ownership after a Lua hot reload without requiring the ring
+    -- to be recreated or the room to be changed.
+    ring:GetData().MizukiLudovicoOwner = player
+
+    local control = getRawShootingInput(player)
+    if Options.MouseControl
+        and player.ControllerIndex == 0
+        and player:AreControlsEnabled()
+        and Input.IsMouseBtnPressed(0)
+    then
+        control = Input.GetMousePosition(true) - ring.Position
+    end
+    local targetVelocity = Vector.Zero
+    if control:Length() > 0.01 then
+        targetVelocity = control:Normalized() * player.ShotSpeed * 8
+    end
+    -- Match Samael's controlled-Ludovico movement: approach the requested
+    -- velocity by 20% per frame. Store our own previous velocity because the
+    -- native Ludovico laser controller may rewrite EntityLaser.Velocity between
+    -- callbacks, which would erase the turn history and make direction snap.
+    local ringData = ring:GetData()
+    local smoothedVelocity = ringData.MizukiLudovicoSmoothedVelocity
+        or ring.Velocity
+    smoothedVelocity = smoothedVelocity * 0.8 + targetVelocity * 0.2
+    ringData.MizukiLudovicoSmoothedVelocity = smoothedVelocity
+    ring.Velocity = smoothedVelocity
+
+    return true
+end
+
+
 
 
 
@@ -1881,6 +2248,19 @@ function Mizuki:UpdateWeapon(player)
         data.MizukiRefreshCannonCache = nil
         player:AddCacheFlags(CacheFlag.CACHE_FAMILIARS)
         player:EvaluateItems()
+    end
+    if updateLudovicoTechXProbe(player, data) then
+        -- The ring remains the main projectile. The two cannon groups become a
+        -- shared, rotating extension of its collision area while Ludovico is
+        -- active; ordinary cannon positioning resumes as soon as it ends.
+        data.MizukiHasShootingInput = false
+        data.MizukiCannonAim = Vector(0, -1)
+        Mizuki.updateLudovicoCannons(
+            player,
+            data,
+            data.MizukiLudovicoTechXProbe
+        )
+        return
     end
     data.MizukiLockedCannonPositions = data.MizukiLockedCannonPositions or {}
     data.MizukiLockedCannonAims = data.MizukiLockedCannonAims or {}
@@ -1997,6 +2377,83 @@ function Mizuki:UpdateWeapon(player)
 end
 
 Mizuki:AddCallback(ModCallbacks.MC_POST_PEFFECT_UPDATE, Mizuki.UpdateWeapon)
+
+-- Technology + Ludovico normally damages at the laser ceiling of once every
+-- two logical frames, ignoring Tears. Keep the native collision and all of its
+-- flags, but admit only the hits allowed by Mizuki's current fire delay. The
+-- schedule is stored per target so touching several enemies never makes them
+-- consume one another's damage ticks.
+function Mizuki:ThrottleLudovicoTechXDamage(entity, amount, damageFlags, source)
+    local sourceEntity = source and source.Entity
+    local laser = sourceEntity and sourceEntity:ToLaser()
+    local laserData = laser and laser:GetData()
+    local player = laserData and laserData.MizukiLudovicoOwner
+
+    if not player then
+        -- RING_LUDOVICO attributes its native collision damage directly to the
+        -- firing player (DAMAGE_LASER), not to the EntityLaser returned by
+        -- FireTechXLaser. Resolve that source back to this player's live ring.
+        player = sourceEntity and sourceEntity:ToPlayer()
+        if not player
+            or not isMizuki(player)
+            or (damageFlags & DamageFlag.DAMAGE_LASER) == 0
+        then
+            return
+        end
+        laser = player:GetData().MizukiLudovicoTechXProbe
+        if not laser or not laser:Exists() then return end
+        laserData = laser:GetData()
+        if not laserData.MizukiLudovicoTechXProbe then return end
+    elseif not laserData.MizukiLudovicoTechXProbe then
+        return
+    end
+
+    if not player or not player:Exists() or not isMizuki(player) then
+        return
+    end
+
+    local targetHash = GetPtrHash(entity)
+    local schedules = laserData.MizukiLudovicoDamageSchedules
+    if not schedules then
+        schedules = {}
+        laserData.MizukiLudovicoDamageSchedules = schedules
+    end
+
+    local frame = Game():GetFrameCount()
+    local interval = math.max(player.MaxFireDelay, 1) + 1
+    local schedule = schedules[targetHash]
+    if not schedule then
+        -- Contact should feel immediate; only repeated damage is rate-limited.
+        schedules[targetHash] = {
+            NextFrame = frame + interval,
+            Interval = interval,
+        }
+        return
+    end
+
+    if math.abs(schedule.Interval - interval) > 0.0001 then
+        -- Preserve the completed fraction of the current cooldown when Tears
+        -- changes instead of granting or deleting a whole hit.
+        local remaining = math.max(0, schedule.NextFrame - frame)
+        schedule.NextFrame = frame
+            + remaining * interval / schedule.Interval
+        schedule.Interval = interval
+    end
+
+    if frame + 0.0001 < schedule.NextFrame then
+        return false
+    end
+
+    repeat
+        schedule.NextFrame = schedule.NextFrame + interval
+    until schedule.NextFrame > frame
+end
+
+Mizuki:AddPriorityCallback(
+    ModCallbacks.MC_ENTITY_TAKE_DMG,
+    CallbackPriority.EARLY,
+    Mizuki.ThrottleLudovicoTechXDamage
+)
 
 function Mizuki:TriggerEpicFetusStrike(entity, amount, damageFlags, source)
     local enemy = entity:ToNPC()
@@ -2309,12 +2766,11 @@ Mizuki:AddCallback(ModCallbacks.MC_FAMILIAR_INIT, Mizuki.InitCannonFamiliar, Miz
 -- callback can accidentally overwrite the final render scale.
 function Mizuki:UpdateCannonScale(cannon)
     ensureCannonRegistered(cannon)
-    -- The cannons are never meant to hide. A Lua reload does not reset entity
-    -- state, so a stale `Visible = false` (e.g. left behind by a reflection
-    -- experiment) would otherwise keep the cannon invisible until the entity
-    -- itself is recreated. Clear it here every update.
-    cannon.Visible = true
+    -- Ordinary cannons keep their native render callback alive. Ludovico is the
+    -- exception: those bodies are drawn after the laser ring, so hiding the
+    -- Familiar suppresses its otherwise duplicated native passes.
     local cannonData = cannon:GetData()
+    cannon.Visible = not cannonData.MizukiLudovicoOrbiting
     local aim = cannonData.MizukiCannonAim or Vector(0, -1)
     local isHorizontal = math.abs(aim.X) > math.abs(aim.Y)
     local useLeftGraphics
@@ -2424,9 +2880,14 @@ local function getCannonRenderPosition(renderOffset, worldPosition)
         - room:GetRenderScrollOffset() - Game().ScreenShakeOffset
 end
 
-function Mizuki:RenderCannon(cannon, renderOffset)
+function Mizuki:RenderCannon(cannon, renderOffset, renderAfterLudovicoRing)
     local player = cannon.Player
     if not player or not isMizuki(player) then
+        return
+    end
+    if cannon:GetData().MizukiLudovicoOrbiting
+        and not renderAfterLudovicoRing
+    then
         return
     end
 
@@ -2484,6 +2945,15 @@ function Mizuki:RenderCannon(cannon, renderOffset)
         -- component, most visibly on the strongly tilted resting cannon.
     end
 
+    -- Ludovico contact damage uses cannon.Position, matching the laser ring's
+    -- collision plane. Apply the ring's own PositionOffset only to the manually
+    -- drawn cannon body so both visuals share the same render plane without
+    -- moving either hitbox.
+    local renderWorldOffset = cannon:GetData().MizukiRenderWorldOffset
+    if renderWorldOffset then
+        worldPosition = worldPosition + renderWorldOffset
+    end
+
     -- Sprite:Render is a Sprite method, so it cannot know about the entity's
     -- SpriteScale. The cannon's render scale lives on the entity, so apply it
     -- here or the cannon is drawn 1 / 0.65 too large.
@@ -2533,6 +3003,33 @@ Mizuki:AddCallback(
     ModCallbacks.MC_POST_FAMILIAR_RENDER,
     Mizuki.RenderCannon,
     Mizuki.CannonVariant
+)
+
+function Mizuki:RenderLudovicoCannonsAboveRing(laser, renderOffset)
+    local laserData = laser:GetData()
+    if not laserData.MizukiLudovicoTechXProbe then return end
+
+    local player = laserData.MizukiLudovicoOwner
+    if not player or not player:Exists() then return end
+
+    local cannons = player:GetData().MizukiCannons
+    if not cannons then return end
+    for side = 1, 2 do
+        for _, cannon in ipairs(cannons[side] or {}) do
+            if cannon and cannon:Exists() then
+                Mizuki:RenderCannon(
+                    cannon,
+                    renderOffset or Vector.Zero,
+                    true
+                )
+            end
+        end
+    end
+end
+
+Mizuki:AddCallback(
+    ModCallbacks.MC_POST_LASER_RENDER,
+    Mizuki.RenderLudovicoCannonsAboveRing
 )
 
 -- Draw immediately after the selected Familiar. The Familiar survives room
