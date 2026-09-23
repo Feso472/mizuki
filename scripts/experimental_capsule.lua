@@ -5,7 +5,6 @@
 -- Mizuki table; the functions below are published there in turn for the code
 -- that stayed behind.
 
-local EXPERIMENTAL_CAPSULE_PICKUP_SUBTYPE = Mizuki.EXPERIMENTAL_CAPSULE_PICKUP_SUBTYPE
 local GLOWING_HOUR_GLASS = Mizuki.GLOWING_HOUR_GLASS
 local HOUR_GLASS = Mizuki.HOUR_GLASS
 local CAPSULE_STAT_CACHE_FLAGS = Mizuki.CAPSULE_STAT_CACHE_FLAGS
@@ -94,28 +93,10 @@ local function addExperimentalPillStats(total, addition)
     return total
 end
 
-local function removeDroppedExperimentalCapsules(player)
-    for _, entity in ipairs(Isaac.FindByType(
-        EntityType.ENTITY_PICKUP,
-        PickupVariant.PICKUP_TAROTCARD,
-        -1,
-        false,
-        false
-    )) do
-        if (entity.SubType == Mizuki.ExperimentalCapsuleCard
-                or entity.SubType == EXPERIMENTAL_CAPSULE_PICKUP_SUBTYPE)
-            and entity.Position:DistanceSquared(player.Position) <= 14400 then
-            entity:Remove()
-        end
-    end
-end
-
 local function giveExperimentalCapsule(player)
     local state = getCapsuleState(player)
     local existingSlot = findExperimentalCapsuleSlot(player)
     if existingSlot == 0 then
-        state.WasHeld = true
-        state.LastSlot = 0
         return
     end
 
@@ -139,29 +120,29 @@ local function giveExperimentalCapsule(player)
 
     player:SetCard(0, Mizuki.ExperimentalCapsuleCard)
     state.Consumed = false
-    state.WasHeld = true
-    state.LastSlot = 0
 end
 
-local function giveCapsuleHourGlass(player, alreadyUsed)
+local function giveCapsuleHourGlass(player)
     -- SetPocketActiveItem is the only stable vanilla API for a character that
-    -- did not start with an XML-defined pocket active. Remaining capsule uses
-    -- are tracked by the mod, while the native VarData is synchronized below
-    -- so the HUD shows the same count.
+    -- did not start with an XML-defined pocket active. Native use-count
+    -- handling stays with the game.
     player:SetPocketActiveItem(GLOWING_HOUR_GLASS, ActiveSlot.SLOT_POCKET, true)
+end
 
-    local used = alreadyUsed or 0
-    if used > 0 then
-        -- SetPocketActiveItem first materializes the dynamic pocket-active
-        -- slot. Replacing that occupied slot through the vanilla
-        -- AddCollectible API then writes Glowing Hour Glass's real VarData,
-        -- which is also what the HUD uses for its remaining-use display.
+local function giveCapsuleHourGlassWithUsesSpent(player, usesSpent)
+    if usesSpent >= 3 then
+        player:SetPocketActiveItem(HOUR_GLASS, ActiveSlot.SLOT_POCKET, true)
+        return
+    end
+
+    player:SetPocketActiveItem(GLOWING_HOUR_GLASS, ActiveSlot.SLOT_POCKET, true)
+    if usesSpent > 0 then
         player:AddCollectible(
             GLOWING_HOUR_GLASS,
             0,
             false,
             ActiveSlot.SLOT_POCKET,
-            used
+            usesSpent
         )
     end
 end
@@ -172,26 +153,74 @@ function Mizuki:MaintainExperimentalCapsule(player)
     end
 
     local state = getCapsuleState(player)
+
+    if state.CapsuleNativeRewindPending then
+        local restoredCapsuleSlot = findExperimentalCapsuleSlot(player)
+        if restoredCapsuleSlot ~= nil and state.CapsuleHourGlassOrigin then
+            state.CapsuleFloorRewindCount =
+                (state.CapsuleFloorRewindCount or 0) + 1
+            local usesSpent = state.CapsuleFloorRewindCount
+
+            -- The rewind restores the capsule from its snapshot. Recreate the
+            -- native hourglass with the number of uses already spent this floor.
+            player:SetCard(restoredCapsuleSlot, Card.CARD_NULL)
+            state.Consumed = true
+            giveCapsuleHourGlassWithUsesSpent(player, usesSpent)
+            state.CapsuleHourGlassOrigin = usesSpent < 3
+            state.CapsuleNativeRewindPending = nil
+            state.CapsuleNativeRewindUseFrame = nil
+
+            if state.CapsulePillStatDelta
+                and not state.CapsuleFloorPillDeltaApplied
+            then
+                state.RewindStatDelta = addExperimentalPillStats(
+                    state.RewindStatDelta,
+                    state.CapsulePillStatDelta
+                )
+                state.CapsuleFloorPillDeltaApplied = true
+            end
+            if state.CapsulePillStatDelta then
+                player:AddCacheFlags(CAPSULE_STAT_CACHE_FLAGS)
+                player:EvaluateItems()
+            end
+        elseif state.CapsuleNativeRewindUseFrame
+            and Game():GetFrameCount() - state.CapsuleNativeRewindUseFrame > 90
+        then
+            -- A blocked/failed native rewind may not restore the capsule.
+            -- Expire its pending probe so it cannot affect a later room state.
+            state.CapsuleNativeRewindPending = nil
+            state.CapsuleNativeRewindUseFrame = nil
+        end
+    end
+
     local slot = findExperimentalCapsuleSlot(player)
     if not state.Initialized then
         state.Initialized = true
-        state.LastSlot = slot or 0
+        local pocketActive = player:GetActiveItem(ActiveSlot.SLOT_POCKET)
         if slot ~= nil then
             state.Consumed = false
-            state.WasHeld = true
-        elseif player:GetActiveItem(ActiveSlot.SLOT_POCKET)
-            ~= CollectibleType.COLLECTIBLE_NULL then
+            state.CapsuleHourGlassOrigin = false
+            state.CapsuleFloorRewindCount = 0
+        elseif pocketActive ~= CollectibleType.COLLECTIBLE_NULL then
             state.Consumed = true
-            state.WasHeld = false
+            state.CapsuleHourGlassOrigin = pocketActive == GLOWING_HOUR_GLASS
+            local activeItemDesc = player.GetActiveItemDesc
+                and player:GetActiveItemDesc(ActiveSlot.SLOT_POCKET)
+            state.CapsuleFloorRewindCount = state.CapsuleHourGlassOrigin
+                and activeItemDesc
+                and (activeItemDesc.VarData or 0)
+                or 0
         else
             -- Makes a Lua hot reload recover the character's floor state
             -- instead of leaving both pocket areas blank.
             giveExperimentalCapsule(player)
+            state.CapsuleHourGlassOrigin = false
+            state.CapsuleFloorRewindCount = 0
             slot = findExperimentalCapsuleSlot(player)
         end
     end
     if state.CapturePillStatsPending and state.PillStatsBefore then
-        state.PendingStatDelta = subtractExperimentalPillStats(
+        state.CapsulePillStatDelta = subtractExperimentalPillStats(
             captureExperimentalPillStats(player),
             state.PillStatsBefore
         )
@@ -199,57 +228,11 @@ function Mizuki:MaintainExperimentalCapsule(player)
         state.CapturePillStatsPending = nil
     end
     if slot ~= nil then
-        -- Glowing Hour Glass restores the pre-use consumable inventory. Mod
-        -- state is intentionally kept outside that snapshot, so a consumed
-        -- capsule is removed again instead of becoming an infinite hourglass.
-        if state.Consumed then
-            player:SetCard(slot, Card.CARD_NULL)
-            slot = nil
-        else
-            state.WasHeld = true
-            state.LastSlot = slot
-            return
-        end
-    end
-
-    if state.RewindFrames then
-        state.RewindFrames = state.RewindFrames - 1
-        if state.RewindFrames <= 0 then
-            state.RewindFrames = nil
-            if state.PendingStatDelta then
-                state.RewindStatDelta = addExperimentalPillStats(
-                    state.RewindStatDelta,
-                    state.PendingStatDelta
-                )
-                state.PendingStatDelta = nil
-                player:AddCacheFlags(CAPSULE_STAT_CACHE_FLAGS)
-                player:EvaluateItems()
-            end
-            giveCapsuleHourGlass(player, 1)
-            state.CapsuleHourGlassUsesRemaining = 2
-        end
-    end
-
-    if state.CapsuleHourGlassRestoreFrames then
-        state.CapsuleHourGlassRestoreFrames = state.CapsuleHourGlassRestoreFrames - 1
-        if state.CapsuleHourGlassRestoreFrames <= 0 then
-            state.CapsuleHourGlassRestoreFrames = nil
-            giveCapsuleHourGlass(player, 3 - state.CapsuleHourGlassUsesRemaining)
-        end
-    end
-
-    if state.CapsuleHourGlassFinishFrames then
-        state.CapsuleHourGlassFinishFrames = state.CapsuleHourGlassFinishFrames - 1
-        if state.CapsuleHourGlassFinishFrames <= 0 then
-            state.CapsuleHourGlassFinishFrames = nil
-            state.CapsuleHourGlassUsesRemaining = nil
-            player:SetPocketActiveItem(HOUR_GLASS, ActiveSlot.SLOT_POCKET, true)
-        end
-    end
-
-    if not state.Consumed and state.WasHeld then
-        removeDroppedExperimentalCapsules(player)
-        giveExperimentalCapsule(player)
+        state.Consumed = false
+        state.CapsuleHourGlassOrigin = false
+        state.CapsuleNativeRewindPending = nil
+        state.CapsuleNativeRewindUseFrame = nil
+        return
     end
 end
 
@@ -285,17 +268,16 @@ function Mizuki:UseExperimentalCapsule(card, player, useFlags)
 
     local state = getCapsuleState(player)
     state.Consumed = true
-    state.WasHeld = false
-    state.ImmediateHourGlass = true
-    state.UseRoomIndex = Game():GetLevel():GetCurrentRoomIndex()
-
+    state.CapsuleHourGlassOrigin = true
+    state.CapsuleFloorPillDeltaApplied = false
+    state.CapsulePillStatDelta = nil
     state.PillStatsBefore = captureExperimentalPillStats(player)
     state.CapturePillStatsPending = true
 
     -- Delegate the stat changes, feedback and all edge cases to the vanilla
     -- Experimental Pill implementation instead of reproducing its RNG here.
     player:UsePill(PillEffect.PILLEFFECT_EXPERIMENTAL, PillColor.PILL_NULL, useFlags)
-    giveCapsuleHourGlass(player, 0)
+    giveCapsuleHourGlass(player)
 end
 
 
@@ -311,10 +293,20 @@ function Mizuki:UseCapsuleHourGlass(collectible, rng, player, useFlags, activeSl
     reconcileState.Pending = true
 
     local state = getCapsuleState(player)
-    -- If the hourglass was activated before the next player update, finish
-    -- the post-pill snapshot here. The native pill cache has resolved by now.
+    if activeSlot ~= ActiveSlot.SLOT_POCKET then
+        return
+    end
+
+    -- Primary and Schoolbag hourglasses remain native and do not participate
+    -- in capsule rewind handling. For a capsule-created pocket hourglass, only
+    -- mark the native rewind; the next player update checks whether its
+    -- restored inventory actually contains the capsule.
+    if not state.CapsuleHourGlassOrigin or not state.Consumed then
+        return
+    end
+
     if state.CapturePillStatsPending and state.PillStatsBefore then
-        state.PendingStatDelta = subtractExperimentalPillStats(
+        state.CapsulePillStatDelta = subtractExperimentalPillStats(
             captureExperimentalPillStats(player),
             state.PillStatsBefore
         )
@@ -322,31 +314,8 @@ function Mizuki:UseCapsuleHourGlass(collectible, rng, player, useFlags, activeSl
         state.CapturePillStatsPending = nil
     end
 
-    local isImmediateCapsuleHourGlass = state.ImmediateHourGlass
-        and state.UseRoomIndex == Game():GetLevel():GetCurrentRoomIndex()
-    if state.Consumed and isImmediateCapsuleHourGlass then
-        -- Resolve after the vanilla rewind has restored the room/player state.
-        -- Item restoration must not depend on whether the pill stat cache has
-        -- finished resolving; a very fast use can arrive before that snapshot.
-        -- Clear the marker before restoring the item so later uses are native.
-        state.ImmediateHourGlass = false
-        state.RewindRequested = true
-    elseif state.CapsuleHourGlassUsesRemaining then
-        state.CapsuleHourGlassUsesRemaining = state.CapsuleHourGlassUsesRemaining - 1
-        if state.CapsuleHourGlassUsesRemaining > 0 then
-            state.CapsuleHourGlassRestoreRequested = true
-        else
-            state.CapsuleHourGlassFinishRequested = true
-        end
-    end
-
-    if isImmediateCapsuleHourGlass or state.CapsuleHourGlassUsesRemaining ~= nil then
-        return {
-            Discharge = false,
-            Remove = false,
-            ShowAnim = true,
-        }
-    end
+    state.CapsuleNativeRewindPending = true
+    state.CapsuleNativeRewindUseFrame = Game():GetFrameCount()
 end
 
 
@@ -361,62 +330,29 @@ function Mizuki:ExpireImmediateCapsuleHourGlass()
                 reconcileState.Frames = 2
             end
 
-            local state = getCapsuleState(player)
-            if state.RewindRequested then
-                state.RewindRequested = nil
-                state.RewindFrames = 1
-            elseif state.CapsuleHourGlassRestoreRequested then
-                state.CapsuleHourGlassRestoreRequested = nil
-                state.CapsuleHourGlassRestoreFrames = 1
-            elseif state.CapsuleHourGlassFinishRequested then
-                state.CapsuleHourGlassFinishRequested = nil
-                state.CapsuleHourGlassFinishFrames = 1
-            else
-                state.ImmediateHourGlass = false
-                state.PendingStatDelta = nil
-            end
         end
     end
 end
 
 
 function Mizuki:InitializeExperimentalCapsule(isContinued)
-    capsuleStates = {}
-    cannonReconcileStates = {}
+    if isContinued then return end
+
+    for index in pairs(capsuleStates) do
+        capsuleStates[index] = nil
+    end
+    for index in pairs(cannonReconcileStates) do
+        cannonReconcileStates[index] = nil
+    end
     local game = Game()
     for index = 0, game:GetNumPlayers() - 1 do
         local player = Isaac.GetPlayer(index)
         if isMizuki(player) then
-            -- Add by resolved custom ID instead of relying on players.xml to
-            -- parse a localized/custom item name. The quest tag protects it
-            -- from ordinary rerolls after this one-time initialization.
-            if not player:HasCollectible(Mizuki.FanItem) then
-                player:AddCollectible(Mizuki.FanItem, 0, false)
-            end
-            player:AddCacheFlags(
-                CacheFlag.CACHE_FAMILIARS
-                    | CacheFlag.CACHE_TEARCOLOR
-                    | CacheFlag.CACHE_SPEED
-                    | CacheFlag.CACHE_LUCK
-            )
+            -- A quick restart can evaluate the new player before this callback
+            -- clears the previous run's capsule stat delta. Recalculate every
+            -- stat that delta can affect after clearing it.
+            player:AddCacheFlags(CAPSULE_STAT_CACHE_FLAGS)
             player:EvaluateItems()
-            local state = getCapsuleState(player)
-            local slot = findExperimentalCapsuleSlot(player)
-            local pocketActive = player:GetActiveItem(ActiveSlot.SLOT_POCKET)
-            local hasCapsuleHourGlass = pocketActive == GLOWING_HOUR_GLASS
-                or pocketActive == HOUR_GLASS
-
-            state.WasHeld = slot ~= nil
-            state.Initialized = true
-            state.LastSlot = slot or 0
-            state.Consumed = hasCapsuleHourGlass and slot == nil
-            state.ImmediateHourGlass = false
-            state.PendingStatDelta = nil
-
-            if slot == nil and pocketActive == CollectibleType.COLLECTIBLE_NULL then
-                giveExperimentalCapsule(player)
-            end
-
         end
     end
 end
@@ -437,19 +373,15 @@ function Mizuki:RefreshExperimentalCapsule()
 
             local state = getCapsuleState(player)
             state.Consumed = false
-            state.WasHeld = false
             state.Initialized = true
-            state.ImmediateHourGlass = false
-            state.PendingStatDelta = nil
+            state.CapsuleHourGlassOrigin = false
+            state.CapsuleFloorRewindCount = 0
+            state.CapsuleFloorPillDeltaApplied = false
+            state.CapsulePillStatDelta = nil
+            state.CapsuleNativeRewindPending = nil
+            state.CapsuleNativeRewindUseFrame = nil
             state.PillStatsBefore = nil
             state.CapturePillStatsPending = nil
-            state.RewindRequested = nil
-            state.RewindFrames = nil
-            state.CapsuleHourGlassUsesRemaining = nil
-            state.CapsuleHourGlassRestoreRequested = nil
-            state.CapsuleHourGlassRestoreFrames = nil
-            state.CapsuleHourGlassFinishRequested = nil
-            state.CapsuleHourGlassFinishFrames = nil
             giveExperimentalCapsule(player)
         end
     end

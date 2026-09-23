@@ -266,15 +266,19 @@ local function queueFloorGiftForPlayer(player)
     player:EvaluateItems()
 end
 
-function Mizuki:QueueFanFloorGifts()
+function Mizuki:InitializeFanFloorGift(isContinued)
+    if isContinued == true then return end
+
     for index = 0, Game():GetNumPlayers() - 1 do
         local player = Isaac.GetPlayer(index)
-        if isMizuki(player) then queueFloorGiftForPlayer(player) end
+        if isMizuki(player) then
+            if isContinued == false and not player:HasCollectible(Mizuki.FanItem) then
+                -- Resolve the custom item by ID instead of a localized players.xml name.
+                player:AddCollectible(Mizuki.FanItem, 0, false)
+            end
+            queueFloorGiftForPlayer(player)
+        end
     end
-end
-
-function Mizuki:InitializeFanFloorGift(isContinued)
-    if not isContinued then Mizuki:QueueFanFloorGifts() end
 end
 
 function Mizuki:DispatchFanFloorGift(player)
@@ -300,5 +304,5 @@ Mizuki:AddCallback(ModCallbacks.MC_FAMILIAR_INIT, Mizuki.InitFanFamiliar, Mizuki
 Mizuki:AddCallback(ModCallbacks.MC_FAMILIAR_UPDATE, Mizuki.UpdateFanFamiliar, Mizuki.FanVariant)
 Mizuki:AddCallback(ModCallbacks.MC_PRE_SPAWN_CLEAN_AWARD, Mizuki.RollFanRoomClearGifts)
 Mizuki:AddCallback(ModCallbacks.MC_POST_GAME_STARTED, Mizuki.InitializeFanFloorGift)
-Mizuki:AddCallback(ModCallbacks.MC_POST_NEW_LEVEL, Mizuki.QueueFanFloorGifts)
+Mizuki:AddCallback(ModCallbacks.MC_POST_NEW_LEVEL, Mizuki.InitializeFanFloorGift)
 Mizuki:AddCallback(ModCallbacks.MC_POST_PEFFECT_UPDATE, Mizuki.DispatchFanFloorGift)

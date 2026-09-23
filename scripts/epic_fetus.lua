@@ -15,7 +15,27 @@ local advanceLeadPencil = Mizuki.advanceLeadPencil
 -- weapon system, including its tear-size initialization and firing sound.
 local EPIC_FETUS_TRACK_FRAMES = 35
 local EPIC_FETUS_FALL_FRAMES = 10
-local EPIC_FETUS_COOLDOWN_MULTIPLIER = 2
+local EPIC_FETUS_COOLDOWN_MULTIPLIER = 3
+local EPIC_FETUS_MAX_ACTIVE_STRIKES = 16
+local EPIC_FETUS_GRID_HALF_SIZE = 20
+local EPIC_FETUS_RING_MIN_THICKNESS = 10
+
+local function getEpicFetusStrikes(data)
+    local strikes = data.MizukiEpicFetusStrikes
+    if not strikes then
+        strikes = {}
+        data.MizukiEpicFetusStrikes = strikes
+    end
+
+    -- Preserve an in-flight strike across a Lua hot reload from the old
+    -- single-strike implementation, then retire the ambiguous legacy field.
+    local legacyStrike = data.MizukiEpicFetusStrike
+    if legacyStrike then
+        strikes[#strikes + 1] = legacyStrike
+        data.MizukiEpicFetusStrike = nil
+    end
+    return strikes
+end
 
 local function spawnEpicFetusRocket(player, strike)
     local target = strike.Target
@@ -50,44 +70,44 @@ local function beginEpicFetusCooldown(player, data)
     )
 end
 
-local function updateEpicFetusStrike(player, data)
+local function canStartEpicFetusStrike(data)
+    return (data.MizukiEpicFetusCooldown or 0) <= 0
+        and #getEpicFetusStrikes(data) < EPIC_FETUS_MAX_ACTIVE_STRIKES
+end
+
+local function updateEpicFetusStrikes(player, data)
     local cooldown = data.MizukiEpicFetusCooldown or 0
     if cooldown > 0 then
-        data.MizukiEpicFetusCooldown = cooldown - 1
+        data.MizukiEpicFetusCooldown = math.max(0, cooldown - 1)
     end
 
-    local strike = data.MizukiEpicFetusStrike
-    if not strike then return end
+    local strikes = getEpicFetusStrikes(data)
+    for index = #strikes, 1, -1 do
+        local strike = strikes[index]
+        local target = strike.Target
+        if not target or not target:Exists() then
+            table.remove(strikes, index)
+        elseif not strike.Locked then
+            local enemy = strike.Enemy
+            if enemy and enemy:Exists() and not enemy:IsDead() then
+                target.Position = Vector(enemy.Position.X, enemy.Position.Y)
+            end
 
-    local target = strike.Target
-    if not target or not target:Exists() then
-        if strike.Locked then beginEpicFetusCooldown(player, data) end
-        data.MizukiEpicFetusStrike = nil
-        return
-    end
+            strike.TrackFrames = strike.TrackFrames - 1
+            if strike.TrackFrames <= 0 then
+                spawnEpicFetusRocket(player, strike)
+            end
+        else
+            -- TARGET normally remains player-controlled. Once this strike
+            -- locks, pin it every frame so its native update cannot move the
+            -- confirmed landing point before the rocket arrives.
+            target.Position = strike.LockedPosition
+            target.Velocity = Vector.Zero
 
-    if not strike.Locked then
-        local enemy = strike.Enemy
-        if enemy and enemy:Exists() and not enemy:IsDead() then
-            target.Position = Vector(enemy.Position.X, enemy.Position.Y)
+            if not strike.Rocket or not strike.Rocket:Exists() then
+                table.remove(strikes, index)
+            end
         end
-
-        strike.TrackFrames = strike.TrackFrames - 1
-        if strike.TrackFrames <= 0 then
-            spawnEpicFetusRocket(player, strike)
-        end
-        return
-    end
-
-    -- TARGET normally remains player-controlled. Once this strike locks, pin
-    -- it every frame so its native update cannot move the confirmed landing
-    -- point before the rocket arrives.
-    target.Position = strike.LockedPosition
-    target.Velocity = Vector.Zero
-
-    if not strike.Rocket or not strike.Rocket:Exists() then
-        data.MizukiEpicFetusStrike = nil
-        beginEpicFetusCooldown(player, data)
     end
 end
 
@@ -126,6 +146,23 @@ local EPIC_FETUS_GRID_TARGET_TYPES = {
     [GridEntityType.GRID_STATUE] = true,
 }
 
+local function getEpicFetusDoorSlotTarget(room, slot)
+    local door = room:GetDoor(slot)
+    local isClosedDoor = door
+        and (not door:IsOpen() or door:CanBlowOpen())
+    if not room:IsDoorSlotAllowed(slot)
+        or (door and not isClosedDoor)
+    then
+        return nil
+    end
+
+    -- Empty valid slots deliberately remain targets. Treating them differently
+    -- from an undiscovered secret-room door would reveal the hidden connection.
+    local slotPosition = door and door.Position
+        or room:GetDoorSlotPosition(slot)
+    return room:GetClampedPosition(slotPosition, 0)
+end
+
 local function getEpicFetusGridTarget(laser)
     local room = Game():GetRoom()
     local endpoint = laser:GetEndPoint()
@@ -148,15 +185,14 @@ local function getEpicFetusGridTarget(laser)
         end
     end
 
-    -- Door cells sit on the room boundary and are not always returned by
-    -- GetGridEntityFromPos at the hit point. Check closed doors separately so
-    -- the missile can still serve as a bomb for opening them.
+    -- Door slots sit on the room boundary and are not returned by the grid
+    -- probe. Empty valid slots intentionally behave like hidden doors.
     for slot = 0, 7 do
-        local door = room:GetDoor(slot)
-        if door and not door:IsOpen()
-            and (door.Position - hitPosition):LengthSquared() <= 30 * 30
+        local position = getEpicFetusDoorSlotTarget(room, slot)
+        if position
+            and (position - hitPosition):LengthSquared() <= 30 * 30
         then
-            return Vector(door.Position.X, door.Position.Y), hitDistance
+            return position, hitDistance
         end
     end
 
@@ -175,9 +211,7 @@ local function queueEpicFetusGridTarget(laser)
     end
 
     local data = player:GetData()
-    if data.MizukiEpicFetusStrike
-        or (data.MizukiEpicFetusCooldown or 0) > 0
-    then
+    if not canStartEpicFetusStrike(data) then
         data.MizukiEpicFetusGridCandidate = nil
         return
     end
@@ -196,6 +230,9 @@ local function queueEpicFetusGridTarget(laser)
 end
 
 local function startEpicFetusStrike(player, enemy, position)
+    local data = player:GetData()
+    if not canStartEpicFetusStrike(data) then return false end
+
     local target = Isaac.Spawn(
         EntityType.ENTITY_EFFECT,
         EffectVariant.TARGET,
@@ -206,12 +243,176 @@ local function startEpicFetusStrike(player, enemy, position)
     ):ToEffect()
     target.Timeout = EPIC_FETUS_TRACK_FRAMES + EPIC_FETUS_FALL_FRAMES
 
-    player:GetData().MizukiEpicFetusStrike = {
+    local strikes = getEpicFetusStrikes(data)
+    strikes[#strikes + 1] = {
         Target = target,
         Enemy = enemy,
         TrackFrames = EPIC_FETUS_TRACK_FRAMES,
         Locked = false,
     }
+    -- Fire rate controls the interval between strike starts. The previous
+    -- missile may still be tracking or falling when this cooldown expires.
+    beginEpicFetusCooldown(player, data)
+    return true
+end
+
+local function queueLudovicoEpicFetusEnemy(player, enemy, fromCannon)
+    if not player:HasCollectible(CollectibleType.COLLECTIBLE_EPIC_FETUS) then
+        return
+    end
+
+    local data = player:GetData()
+    if not canStartEpicFetusStrike(data) then
+        data.MizukiEpicFetusLudovicoCandidate = nil
+        return
+    end
+
+    local frame = Game():GetFrameCount()
+    local priority = fromCannon and 4 or 3
+    local candidate = data.MizukiEpicFetusLudovicoCandidate
+    if not candidate
+        or candidate.Frame ~= frame
+        or priority > candidate.Priority
+    then
+        data.MizukiEpicFetusLudovicoCandidate = {
+            Enemy = enemy,
+            EnemyInitSeed = enemy.InitSeed,
+            EnemyPtrHash = GetPtrHash(enemy),
+            Priority = priority,
+            Frame = frame,
+        }
+    end
+end
+
+local function captureLudovicoEpicFetusGeometry(
+    player,
+    ring,
+    cannonHitboxes
+)
+    local data = player:GetData()
+    if not player:HasCollectible(CollectibleType.COLLECTIBLE_EPIC_FETUS)
+        or not canStartEpicFetusStrike(data)
+    then
+        data.MizukiEpicFetusLudovicoGeometry = nil
+        return
+    end
+
+    local cannons = {}
+    for _, hitbox in ipairs(cannonHitboxes) do
+        cannons[#cannons + 1] = {
+            Position = Vector(hitbox.Position.X, hitbox.Position.Y),
+            Radius = hitbox.Radius,
+        }
+    end
+    data.MizukiEpicFetusLudovicoGeometry = {
+        Frame = Game():GetFrameCount(),
+        RingPosition = Vector(ring.Position.X, ring.Position.Y),
+        RingRadius = ring.Radius and ring.Radius > 0
+            and ring.Radius
+            or 60,
+        RingThickness = math.max(
+            ring.Size or 0,
+            EPIC_FETUS_RING_MIN_THICKNESS
+        ),
+        Cannons = cannons,
+    }
+end
+
+local function considerLudovicoGridPosition(
+    candidate,
+    contactPosition,
+    geometry
+)
+    for _, cannon in ipairs(geometry.Cannons) do
+        local overlap = contactPosition:Distance(cannon.Position)
+            - cannon.Radius
+            - EPIC_FETUS_GRID_HALF_SIZE
+        if overlap <= 0
+            and (not candidate
+                or candidate.Priority < 2
+                or candidate.Priority == 2 and overlap < candidate.Distance)
+        then
+            candidate = {
+                Position = Vector(contactPosition.X, contactPosition.Y),
+                Priority = 2,
+                Distance = overlap,
+            }
+        end
+    end
+
+    local ringDistance = contactPosition:Distance(geometry.RingPosition)
+    local ringOverlap = math.abs(ringDistance - geometry.RingRadius)
+        - geometry.RingThickness
+        - EPIC_FETUS_GRID_HALF_SIZE
+    if ringOverlap <= 0
+        and (not candidate
+            or candidate.Priority < 1
+            or candidate.Priority == 1 and ringOverlap < candidate.Distance)
+    then
+        candidate = {
+            Position = Vector(contactPosition.X, contactPosition.Y),
+            Priority = 1,
+            Distance = ringOverlap,
+        }
+    end
+    return candidate
+end
+
+local function getLudovicoEpicFetusGridCandidate(geometry)
+    local room = Game():GetRoom()
+    local candidate = nil
+    for index = 0, room:GetGridSize() - 1 do
+        local grid = room:GetGridEntity(index)
+        if grid
+            and grid.CollisionClass ~= GridCollisionClass.COLLISION_NONE
+            and EPIC_FETUS_GRID_TARGET_TYPES[grid:GetType()]
+        then
+            candidate = considerLudovicoGridPosition(
+                candidate,
+                grid.Position,
+                geometry
+            )
+        end
+    end
+
+    for slot = 0, 7 do
+        local contactPosition = getEpicFetusDoorSlotTarget(room, slot)
+        if contactPosition then
+            candidate = considerLudovicoGridPosition(
+                candidate,
+                contactPosition,
+                geometry
+            )
+        end
+    end
+    return candidate
+end
+
+local function getLudovicoEpicFetusCandidate(player, frame)
+    local data = player:GetData()
+    local enemyCandidate = data.MizukiEpicFetusLudovicoCandidate
+    local geometry = data.MizukiEpicFetusLudovicoGeometry
+    data.MizukiEpicFetusLudovicoCandidate = nil
+    data.MizukiEpicFetusLudovicoGeometry = nil
+
+    if enemyCandidate and enemyCandidate.Frame == frame then
+        local enemy = enemyCandidate.Enemy
+        if enemy
+            and enemy:Exists()
+            and enemy.InitSeed == enemyCandidate.EnemyInitSeed
+            and GetPtrHash(enemy) == enemyCandidate.EnemyPtrHash
+        then
+            return enemy, Vector(enemy.Position.X, enemy.Position.Y)
+        end
+    end
+
+    if geometry and geometry.Frame == frame then
+        local gridCandidate = getLudovicoEpicFetusGridCandidate(geometry)
+        if gridCandidate then
+            return nil, gridCandidate.Position
+        end
+    end
+    return nil, nil
 end
 
 local function appendCenteredBeamAngles(angles, center, count, totalSpread)
@@ -234,5 +435,10 @@ end
 Mizuki.appendCenteredBeamAngles = appendCenteredBeamAngles
 Mizuki.getMizukiBeamOwnerFromDamageSource = getMizukiBeamOwnerFromDamageSource
 Mizuki.queueEpicFetusGridTarget = queueEpicFetusGridTarget
+Mizuki.canStartEpicFetusStrike = canStartEpicFetusStrike
+Mizuki.queueLudovicoEpicFetusEnemy = queueLudovicoEpicFetusEnemy
+Mizuki.captureLudovicoEpicFetusGeometry =
+    captureLudovicoEpicFetusGeometry
+Mizuki.getLudovicoEpicFetusCandidate = getLudovicoEpicFetusCandidate
 Mizuki.startEpicFetusStrike = startEpicFetusStrike
-Mizuki.updateEpicFetusStrike = updateEpicFetusStrike
+Mizuki.updateEpicFetusStrikes = updateEpicFetusStrikes
