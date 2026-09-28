@@ -1,11 +1,10 @@
--- Kidney Stone: the fire-rate-drop burst the cannons fire when the Tears
--- stat spikes mid-shot.
+-- Kidney Stone: detect the native Tears spike, preserve its automatic shooting
+-- intent, and make charge-based Mizuki weapons release at full charge. The
+-- final Tears stat independently decides whether sustained-beam mode activates.
 --
 -- Extracted from main.lua. main publishes the helpers this file needs on the
 -- Mizuki table; the functions below are published there in turn for the code
 -- that stayed behind.
-
-local removeActiveMizukiBeams = Mizuki.removeActiveMizukiBeams
 
 local KIDNEY_STONE_TRIGGER_FIRE_RATE_RATIO = 4
 local KIDNEY_STONE_MIN_BURST_FRAMES = 150
@@ -37,10 +36,6 @@ local function updateKidneyStoneBurst(player, data)
                 Direction = data.MizukiLastShootDirection,
             }
             data.MizukiKidneyStoneBurst = burst
-            removeActiveMizukiBeams(data)
-            data.MizukiCharge = 0
-            data.MizukiAim = nil
-            data.MizukiChargeBarFullFrames = nil
         end
     end
 
@@ -66,14 +61,10 @@ local function updateKidneyStoneBurst(player, data)
     burst.LastMaxFireDelay = currentMaxFireDelay
     burst.Elapsed = burst.Elapsed + 1
 
-    local rockBottom = player:HasCollectible(
-        CollectibleType.COLLECTIBLE_ROCK_BOTTOM
-    )
     local naturallyFinished = burst.Elapsed >= KIDNEY_STONE_MIN_BURST_FRAMES
         and burst.StableFrames >= KIDNEY_STONE_STABLE_FRAMES
-    local timedOut = not rockBottom
-        and burst.Elapsed >= KIDNEY_STONE_MAX_BURST_FRAMES
-    if not rockBottom and (naturallyFinished or timedOut) then
+    local timedOut = burst.Elapsed >= KIDNEY_STONE_MAX_BURST_FRAMES
+    if naturallyFinished or timedOut then
         data.MizukiKidneyStoneBurst = nil
         return nil
     end

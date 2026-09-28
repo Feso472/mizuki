@@ -7,6 +7,7 @@
 
 local GLOWING_HOUR_GLASS = Mizuki.GLOWING_HOUR_GLASS
 local HOUR_GLASS = Mizuki.HOUR_GLASS
+local EXPERIMENTAL_CAPSULE_PICKUP_SUBTYPE = Mizuki.EXPERIMENTAL_CAPSULE_PICKUP_SUBTYPE
 local CAPSULE_STAT_CACHE_FLAGS = Mizuki.CAPSULE_STAT_CACHE_FLAGS
 local isMizuki = Mizuki.isMizuki
 local capsuleStates = Mizuki.capsuleStates
@@ -16,8 +17,8 @@ local getCapsuleState = Mizuki.getCapsuleState
 
 -- Experimental Capsule -----------------------------------------------------
 -- This is a real pocket object, so it occupies the normal card/pill slot.
--- The small state machine distinguishes deliberately consuming it from trying
--- to drop it: only the latter causes the capsule to be restored.
+-- Consuming the capsule produces the pocket hourglass; dropping it instead
+-- restores the capsule without changing the game's Drop input.
 local function findExperimentalCapsuleSlot(player)
     for slot = 0, 1 do
         if player:GetCard(slot) == Mizuki.ExperimentalCapsuleCard then
@@ -93,10 +94,29 @@ local function addExperimentalPillStats(total, addition)
     return total
 end
 
+local function removeDroppedExperimentalCapsules(player)
+    for _, entity in ipairs(Isaac.FindByType(
+        EntityType.ENTITY_PICKUP,
+        PickupVariant.PICKUP_TAROTCARD,
+        -1,
+        false,
+        false
+    )) do
+        if (entity.SubType == Mizuki.ExperimentalCapsuleCard
+                or entity.SubType == EXPERIMENTAL_CAPSULE_PICKUP_SUBTYPE)
+            and entity.Position:DistanceSquared(player.Position) <= 14400
+            and entity.FrameCount <= 2
+        then
+            entity:Remove()
+        end
+    end
+end
+
 local function giveExperimentalCapsule(player)
     local state = getCapsuleState(player)
     local existingSlot = findExperimentalCapsuleSlot(player)
     if existingSlot == 0 then
+        state.CapsuleWasHeld = true
         return
     end
 
@@ -112,14 +132,29 @@ local function giveExperimentalCapsule(player)
         if slotCount >= 2 and pocketConsumableSlotIsEmpty(player, 1) then
             movePocketConsumable(player, 0, 1)
         else
-            -- With no spare slot, preserve the selected object as a pickup
-            -- before reserving slot 0 for the floor-refreshed capsule.
+            -- Dropping slot 0 may promote slot 1 into its place. Save and clear
+            -- slot 1 first, then put it back after dropping slot 0 so the
+            -- capsule cannot overwrite the promoted item.
+            local secondCard = player:GetCard(1)
+            local secondPill = player:GetPill(1)
+            if slotCount >= 2 then
+                player:SetCard(1, Card.CARD_NULL)
+                player:SetPill(1, PillColor.PILL_NULL)
+            end
             player:DropPocketItem(0, player.Position)
+            if slotCount >= 2 then
+                if secondCard ~= Card.CARD_NULL then
+                    player:SetCard(1, secondCard)
+                elseif secondPill ~= PillColor.PILL_NULL then
+                    player:SetPill(1, secondPill)
+                end
+            end
         end
     end
 
     player:SetCard(0, Mizuki.ExperimentalCapsuleCard)
     state.Consumed = false
+    state.CapsuleWasHeld = true
 end
 
 local function giveCapsuleHourGlass(player)
@@ -165,6 +200,7 @@ function Mizuki:MaintainExperimentalCapsule(player)
             -- native hourglass with the number of uses already spent this floor.
             player:SetCard(restoredCapsuleSlot, Card.CARD_NULL)
             state.Consumed = true
+            state.CapsuleWasHeld = false
             giveCapsuleHourGlassWithUsesSpent(player, usesSpent)
             state.CapsuleHourGlassOrigin = usesSpent < 3
             state.CapsuleNativeRewindPending = nil
@@ -199,10 +235,12 @@ function Mizuki:MaintainExperimentalCapsule(player)
         local pocketActive = player:GetActiveItem(ActiveSlot.SLOT_POCKET)
         if slot ~= nil then
             state.Consumed = false
+            state.CapsuleWasHeld = true
             state.CapsuleHourGlassOrigin = false
             state.CapsuleFloorRewindCount = 0
         elseif pocketActive ~= CollectibleType.COLLECTIBLE_NULL then
             state.Consumed = true
+            state.CapsuleWasHeld = false
             state.CapsuleHourGlassOrigin = pocketActive == GLOWING_HOUR_GLASS
             local activeItemDesc = player.GetActiveItemDesc
                 and player:GetActiveItemDesc(ActiveSlot.SLOT_POCKET)
@@ -229,10 +267,15 @@ function Mizuki:MaintainExperimentalCapsule(player)
     end
     if slot ~= nil then
         state.Consumed = false
+        state.CapsuleWasHeld = true
         state.CapsuleHourGlassOrigin = false
         state.CapsuleNativeRewindPending = nil
         state.CapsuleNativeRewindUseFrame = nil
         return
+    end
+    if state.CapsuleWasHeld and not state.Consumed then
+        removeDroppedExperimentalCapsules(player)
+        giveExperimentalCapsule(player)
     end
 end
 
@@ -268,6 +311,7 @@ function Mizuki:UseExperimentalCapsule(card, player, useFlags)
 
     local state = getCapsuleState(player)
     state.Consumed = true
+    state.CapsuleWasHeld = false
     state.CapsuleHourGlassOrigin = true
     state.CapsuleFloorPillDeltaApplied = false
     state.CapsulePillStatDelta = nil
@@ -373,6 +417,7 @@ function Mizuki:RefreshExperimentalCapsule()
 
             local state = getCapsuleState(player)
             state.Consumed = false
+            state.CapsuleWasHeld = false
             state.Initialized = true
             state.CapsuleHourGlassOrigin = false
             state.CapsuleFloorRewindCount = 0

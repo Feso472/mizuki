@@ -1,4 +1,6 @@
 local MOMS_KNIFE = CollectibleType.COLLECTIBLE_MOMS_KNIFE
+local KNIFE_LASER_ROOT_ANM2 = "gfx/1000.126_Tech Dot.anm2"
+local knifeLaserRoots = {}
 local KNIFE_STATE_FOLLOW = "follow"
 local KNIFE_STATE_OUTBOUND = "outbound"
 local KNIFE_STATE_RETURNING = "returning"
@@ -224,6 +226,19 @@ local function getCannonKnife(cannon)
     return knife
 end
 
+function Mizuki.getCannonMomKnifeShadowDisplacement(cannon)
+    local knife = getCannonKnife(cannon)
+    if not knife or not knife:IsFlying()
+        or knife:GetData().MizukiCannonKnifeState == KNIFE_STATE_FOLLOW
+    then
+        return Vector.Zero
+    end
+    -- Move only the native Familiar shadow. The cannon and its beam origin
+    -- remain at their locked attack position while the knife travels.
+    return knife.Position + knife.PositionOffset
+        - getCannonKnifeFollowPosition(cannon)
+end
+
 local function getAuxiliaryCannonKnives(cannon)
     local cannonData = cannon:GetData()
     local knives = cannonData.MizukiAuxiliaryMomKnives
@@ -395,6 +410,23 @@ local function setKnifeDrivenLaserDistance(beam, distance)
     laser:SetMaxDistance(math.max(1, distance))
 end
 
+local function createCannonKnifeLaserRoot(beam)
+    local laser = beam.Laser
+    local sprite = Sprite()
+    sprite:Load(KNIFE_LASER_ROOT_ANM2, true)
+    sprite:Play("Idle", true)
+    table.insert(knifeLaserRoots, {
+        CannonInitSeed = beam.Cannon.InitSeed,
+        CannonPtrHash = GetPtrHash(beam.Cannon),
+        Laser = laser,
+        LaserInitSeed = laser.InitSeed,
+        LaserPtrHash = GetPtrHash(laser),
+        Sprite = sprite,
+        Position = laser.Position + laser.PositionOffset,
+        LastFrame = Game():GetFrameCount(),
+    })
+end
+
 local function beamOwnsKnife(beam)
     local knife = beam and beam.MomKnife
     if not knife or not knife:Exists()
@@ -500,6 +532,7 @@ function Mizuki.fireCannonMomKnife(cannon, beam, charge, baseChargeFrames)
     beam.MomKnife = knife
     beam.MomKnifeInitSeed = knife.InitSeed
     beam.MomKnifeReturnStarted = false
+    createCannonKnifeLaserRoot(beam)
     return true
 end
 
@@ -627,6 +660,7 @@ function Mizuki:UpdateCannonMomKnifeEntity(knife)
         setKnifeAtVisualPosition(knife, getCannonKnifeFollowPosition(cannon))
         clearCannonKnifeSpin(knife, knifeData)
         knife.Velocity = Vector.Zero
+        Mizuki.refreshCannonMomKnifeShadow(cannon)
         return
     end
 
@@ -702,6 +736,57 @@ function Mizuki:UpdateCannonMomKnifeEntity(knife)
     end
 
     knifeData.MizukiCannonKnifePreviousDistance = distance
+    if knifeData.MizukiCannonKnifeAuxiliary ~= true then
+        Mizuki.refreshCannonMomKnifeShadow(cannon)
+    end
+end
+
+local function renderCannonKnifeLaserRoots(cannon, renderOffset)
+    local game = Game()
+    local room = game:GetRoom()
+    local renderMode = room:GetRenderMode()
+    if renderMode == RenderMode.RENDER_WATER_REFLECT
+        or renderMode == RenderMode.RENDER_WATER_REFRACT
+    then
+        return
+    end
+
+    local frame = game:GetFrameCount()
+    local cannonPtrHash = GetPtrHash(cannon)
+    for index = #knifeLaserRoots, 1, -1 do
+        local root = knifeLaserRoots[index]
+        if root.CannonInitSeed == cannon.InitSeed
+            and root.CannonPtrHash == cannonPtrHash
+        then
+            local sprite = root.Sprite
+            if not game:IsPaused() and root.LastFrame ~= frame then
+                sprite:Update()
+                root.LastFrame = frame
+            end
+            local laser = root.Laser
+            if sameEntity(laser, root.LaserInitSeed, root.LaserPtrHash) then
+                root.Position = laser.Position + laser.PositionOffset
+                -- Preserve the laser's complete colour, including colorize.
+                sprite.Color = laser.Color
+            elseif not root.Ending then
+                root.Ending = true
+                root.Laser = nil
+                sprite:Play("Disappear", true)
+            end
+
+            if root.Ending and sprite:IsFinished("Disappear") then
+                table.remove(knifeLaserRoots, index)
+            else
+                local screenPosition = Isaac.WorldToScreen(root.Position)
+                    + (renderOffset or Vector.Zero)
+                    - room:GetRenderScrollOffset()
+                    - game.ScreenShakeOffset
+                -- Layer 1 is the Tech Dot's downward pointer. Draw only the
+                -- glow, in this Familiar slot before either knife draw path.
+                sprite:RenderLayer(0, screenPosition)
+            end
+        end
+    end
 end
 
 -- Draw the knife through its sprite rather than through Entity:Render. The entity
@@ -821,6 +906,7 @@ function Mizuki.renderCannonMomKnifeBody(
     if not knife then
         return false
     end
+    renderCannonKnifeLaserRoots(cannon, renderOffset)
     if not reflectedBodyPosition and getKnifeRenderLaser(knife) then
         -- The body is supplied by the laser callback. Returning true also keeps
         -- main.lua from drawing the ordinary cannon artwork in this slot.
@@ -891,6 +977,15 @@ function Mizuki:RenderFlyingMomKnives()
         end
     end
 end
+
+function Mizuki:ClearCannonKnifeLaserRoots()
+    knifeLaserRoots = {}
+end
+
+Mizuki:AddCallback(
+    ModCallbacks.MC_POST_NEW_ROOM,
+    Mizuki.ClearCannonKnifeLaserRoots
+)
 
 Mizuki:AddCallback(
     ModCallbacks.MC_POST_RENDER,
