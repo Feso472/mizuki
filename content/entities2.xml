@@ -1,5 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <entities anm2root="gfx/" version="5">
+    <!-- Separate from real cannons: never reconciled by CheckFamiliar. -->
+    <entity name="Mizuki Echo Cannon"
+            anm2path="entities/mizuki/mizuki_cannon.anm2"
+            id="3" variant="9203" subtype="0"
+            baseHP="0" boss="0" champion="0" collisionDamage="0"
+            collisionMass="0" collisionRadius="10" friction="1"
+            numGridCollisionPoints="0" shadowSize="0" stageHP="0" />
     <entity name="Mizuki Cannon"
             anm2path="entities/mizuki/mizuki_cannon.anm2"
             id="3"
@@ -40,7 +47,7 @@
             champion="0"
             collisionDamage="0"
             collisionMass="0"
-            collisionRadius="10"
+            collisionRadius="13"
             friction="1"
             numGridCollisionPoints="0"
             shadowSize="10"

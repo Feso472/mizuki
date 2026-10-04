@@ -7,7 +7,7 @@
         Temporary prototype: copied Isaac placeholders, stored under Mizuki's
         own resource names. Replace those files with Mizuki art later.
     -->
-    <player name="弥月"
+    <player name="Mizuki"
             skin="mizuki/character_mizuki.png"
             hp="6"
             bombs="0"
@@ -18,5 +18,5 @@
             costumeSuffix="mizuki"
             nameimage="PlayerName_Mizuki.png"
             portrait="PlayerPortrait_Mizuki.png"
-            birthright="Prototype pending" />
+            birthright="Shut-in PhD + three rounds in the abyss" />
 </players>

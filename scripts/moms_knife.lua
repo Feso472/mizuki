@@ -1,12 +1,17 @@
+-- region Knife parameters
+-- The real knife and its echo share the same distance-to-spin conversion.
+Mizuki.KnifeParameters = { SpinDegreesPerPixel = 12 }
+-- endregion Knife parameters
+
 local MOMS_KNIFE = CollectibleType.COLLECTIBLE_MOMS_KNIFE
 local KNIFE_LASER_ROOT_ANM2 = "gfx/1000.126_Tech Dot.anm2"
 local knifeLaserRoots = {}
 local KNIFE_STATE_FOLLOW = "follow"
 local KNIFE_STATE_OUTBOUND = "outbound"
 local KNIFE_STATE_RETURNING = "returning"
-local KNIFE_VELOCITY_EPSILON = 0.001
-local KNIFE_DISTANCE_EPSILON = 0.01
-local KNIFE_SPIN_DEGREES_PER_PIXEL = 12
+local KNIFE_VELOCITY_EPSILON = Mizuki.RuntimeParameters.VectorEpsilon
+local KNIFE_DISTANCE_EPSILON = Mizuki.RuntimeParameters.DistanceEpsilon
+local KNIFE_SPIN_DEGREES_PER_PIXEL = Mizuki.KnifeParameters.SpinDegreesPerPixel
 local LUDOVICO_KNIFE_FOLLOW_OUTWARD_OFFSET = 20
 
 local function sameEntity(entity, initSeed, ptrHash)
@@ -48,7 +53,7 @@ local function getCannonKnifeFollowOffset(cannon)
     end
 
     local aim = cannonData.MizukiCannonAim
-    if not aim or aim:Length() <= 0.001 then
+    if not aim or aim:Length() <= KNIFE_VELOCITY_EPSILON then
         return Vector.Zero
     end
 
@@ -382,7 +387,7 @@ local function getLaserPath(laser)
         local position = Vector(sample.X, sample.Y) + positionOffset
         local previous = path[#path]
         local segmentLength = (position - previous):Length()
-        if segmentLength > 0.001 then
+        if segmentLength > KNIFE_VELOCITY_EPSILON then
             totalLength = totalLength + segmentLength
             path[#path + 1] = position
         end
@@ -392,7 +397,7 @@ end
 
 local function getLaserEndpointTransform(laser, distance, fallbackDirection)
     local path, pathLength = getLaserPath(laser)
-    if #path == 1 or pathLength <= 0.001 then
+    if #path == 1 or pathLength <= KNIFE_VELOCITY_EPSILON then
         local direction = fallbackDirection or Vector(1, 0)
         return path[1] + direction:Resized(math.max(0, distance)), direction
     end
@@ -723,7 +728,7 @@ function Mizuki:UpdateCannonMomKnifeEntity(knife)
             returnPosition = targetPosition + returnDirection:Resized(distance)
         end
         local returnDirection = targetPosition - returnPosition
-        if returnDirection:Length() > 0.001 then
+        if returnDirection:Length() > KNIFE_VELOCITY_EPSILON then
             knife.Rotation = returnDirection:GetAngleDegrees()
         end
         setKnifeAtVisualPosition(knife, returnPosition)
@@ -815,6 +820,10 @@ local function drawKnifeSprite(
     sprite.Scale = Vector(knife.SpriteScale.X, knife.SpriteScale.Y)
     sprite.Offset = Vector.Zero
     sprite.Color = knifeData.MizukiCannonKnifeDrawColor or Color.Default
+    local cannon = knifeData.MizukiCannonKnifeCannon
+    if cannon and cannon:Exists() and cannon:GetData().MizukiPersistentEchoMode then
+        sprite.Color = Mizuki.getPersistentEchoColor(sprite.Color)
+    end
     if cancelWaterMirror then
         sprite.FlipY = not sprite.FlipY
     end

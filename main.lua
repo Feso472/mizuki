@@ -1,23 +1,97 @@
 Mizuki = RegisterMod("Mizuki", 1)
 
+-- region Shared parameters
+-- Units and native lifecycle contracts used by more than one feature.
+-- Values with different meanings stay separate even when their defaults match.
+Mizuki.RuntimeParameters = {
+    LogicFramesPerSecond = 30,
+    FrameComparisonEpsilon = 0.0001,
+    MinimumFireInterval = 0.001,
+    VectorEpsilon = 0.001,
+    OffsetEpsilon = 0.001,
+    ScaleEpsilon = 0.001,
+    AimDeadZone = 0.01,
+    DistanceEpsilon = 0.01,
+    DirectionMatchSquaredEpsilon = 0.0001,
+    AngleMatchEpsilon = 0.0001,
+    DamageComparisonEpsilon = 0.0001,
+    NativeLaserInitFrames = 2,
+    RngShiftIndex = 35,
+    PercentScale = 100,
+    ColorByteMax = 255,
+}
+
+-- Weapon-controller tuning stays here, including shared geometry consumed by
+-- feature modules. Existing named constants below retain their original role.
+Mizuki.WeaponParameters = {
+    ChocolateMilkMinChargeFrames = 2,
+    CursedEyeFullChargeShots = 5,
+    MinBeamDistance = 40,
+    MonstrosLungTearsDivisor = 4.3,
+    ThickBrimstoneWidthThreshold = 2.5,
+    BeamDepthBehindCannon = 5,
+    CannonIdleSwingFrames = 150,
+    CannonRotationReturnRate = 0.18,
+    CannonAngleSnapDegrees = 0.1,
+    CannonDepthSnapDistance = 0.5,
+    CannonReflectionSnapDistance = 0.5,
+    AimComponentThreshold = 0.5,
+    DiagonalAimComponent = 0.70710678,
+    BookWormBonusChance = 0.25,
+    MomsEyeBaseChance = 0.5,
+    MomsEyeLuckStep = 0.1,
+    LokisHornsBaseChance = 0.25,
+    LokisHornsLuckStep = 0.05,
+    EyeSoreCountBound = 4,
+    LungMinExtraBeams = 3,
+    LungMaxExtraBeams = 5,
+    LungMinExtraPerCopy = 2,
+    LungMaxExtraPerCopy = 3,
+    LudovicoDefaultRingRadius = 60,
+    LudovicoMoveSpeed = 8,
+    LudovicoVelocityResponse = 0.2,
+    ReflectionPullSpeedMultiplier = 1,
+    ReflectionPullDistanceResponse = 0.05,
+    ChargeBarStartFrames = 12,
+    ChargeBarLoopFrames = 6,
+    ChargeBarProgressFrames = 100,
+    TearBaseSpeed = 10,
+    ImmaculateHeartChance = 0.25,
+    PencilTriggerShots = 15,
+    PencilTearCount = 12,
+    PencilSpreadDegrees = 60,
+    PencilSpeedMin = 0.5,
+    PencilSpeedRandomSpan = 0.75,
+    PencilScaleMin = 0.75,
+    PencilScaleRandomSpan = 0.5,
+    PencilBaseHeight = -5,
+    PencilHeightRandomSpan = 3,
+    PencilBaseFallingSpeed = -10,
+    PencilFallingSpeedRandomSpan = 10,
+    PencilBloodTearChance = 0.5,
+    TearTint = { Red = 246, Green = 171, Blue = 180, ColorizeIntensity = 5 },
+}
+-- endregion Shared parameters
+
 -- Vanilla Repentance+ only. Mizuki's beam uses a native EntityLaser for
 -- collision, damage ticks and tear-effect compatibility. Lua owns its firing
 -- cadence and keeps the laser anchored to the firing cannon position.
-Mizuki.PlayerType = Isaac.GetPlayerTypeByName("弥月", false)
+Mizuki.PlayerType = Isaac.GetPlayerTypeByName("Mizuki", false)
 Mizuki.PlayerAnm2 = "gfx/characters/mizuki/character_mizuki.anm2"
 Mizuki.HairCostume = Isaac.GetCostumeIdByPath(
     "gfx/characters/mizuki/character_mizuki_hair.anm2"
 )
 Mizuki.CannonVariant = Isaac.GetEntityVariantByName("Mizuki Cannon")
 Mizuki.ExperimentalCapsuleCard = Isaac.GetCardIdByName("Mizuki Experimental Capsule")
-Mizuki.FanItem = Isaac.GetItemIdByName("Mizuki Fan")
+Mizuki.FanItem = Isaac.GetItemIdByName("Xiaobotu")
 Mizuki.FanVariant = Isaac.GetEntityVariantByName("Mizuki Fan Familiar")
 local EXPERIMENTAL_CAPSULE_PICKUP_SUBTYPE = 9201
 
-include("scripts/capsule_eid")
+include("translations/main")
+include("scripts/localization")
+include("scripts/birthright")
 
 local GLOWING_HOUR_GLASS = CollectibleType.COLLECTIBLE_GLOWING_HOUR_GLASS
-local HOUR_GLASS = CollectibleType.COLLECTIBLE_HOURGLASS
 local BOX_OF_FRIENDS = CollectibleType.COLLECTIBLE_BOX_OF_FRIENDS
 local BFFS = CollectibleType.COLLECTIBLE_BFFS
 local LUCKY_FOOT = CollectibleType.COLLECTIBLE_LUCKY_FOOT
@@ -67,10 +141,10 @@ local MIZUKI_FORBIDDEN_TEAR_FLAGS = TearFlags.TEAR_WAIT
 -- damage schedule.
 local TECHNOLOGY_ZERO_BEAM_TICK_COUNT = 8
 local TECHNOLOGY_ZERO_BEAM_DURATION =
-    TECHNOLOGY_ZERO_BEAM_TICK_COUNT * 2 + 1
+    TECHNOLOGY_ZERO_BEAM_TICK_COUNT * BEAM_DAMAGE_INTERVAL + 1
 local TECHNOLOGY_ZERO_BEAM_TOTAL_DAMAGE_MULTIPLIER = 8.00
 local DEFAULT_BEAM_TICK_COUNT = 4
-local DEFAULT_BEAM_DURATION = DEFAULT_BEAM_TICK_COUNT * 2 + 1
+local DEFAULT_BEAM_DURATION = DEFAULT_BEAM_TICK_COUNT * BEAM_DAMAGE_INTERVAL + 1
 local DEFAULT_BEAM_TOTAL_DAMAGE_MULTIPLIER = 4.00
 -- Repentance's line weapons keep ordinary multishots close together. This is
 -- the laser/brimstone correction used by the vanilla-compatible multishot
@@ -85,9 +159,9 @@ local IMMACULATE_HEART_FALLING_ACCELERATION = -0.08
 local MIN_CHARGE_DAMAGE_MULTIPLIER = 0.45
 local MIZUKI_TEAR_COLOR = Color(1, 1, 1, 1, 0, 0, 0)
 MIZUKI_TEAR_COLOR:SetColorize(
-    5 * 246 / 255,
-    5 * 171 / 255,
-    5 * 180 / 255,
+    Mizuki.WeaponParameters.TearTint.ColorizeIntensity * Mizuki.WeaponParameters.TearTint.Red / Mizuki.RuntimeParameters.ColorByteMax,
+    Mizuki.WeaponParameters.TearTint.ColorizeIntensity * Mizuki.WeaponParameters.TearTint.Green / Mizuki.RuntimeParameters.ColorByteMax,
+    Mizuki.WeaponParameters.TearTint.ColorizeIntensity * Mizuki.WeaponParameters.TearTint.Blue / Mizuki.RuntimeParameters.ColorByteMax,
     1
 )
 
@@ -134,6 +208,11 @@ local CANNON_FOLLOW_SPEED = 0.25
 local CANNON_MAX_FOLLOW_LAG = 8
 local CANNON_FLOAT_AMPLITUDE = 2
 local CANNON_FLOAT_PERIOD = 45
+
+function Mizuki.getCannonHoverOffset(frame)
+    return math.sin(frame * 2 * math.pi / CANNON_FLOAT_PERIOD)
+        * CANNON_FLOAT_AMPLITUDE
+end
 -- Tap Drop to toggle a stationary cannon pair; hold it to invert that state
 -- only until release. The game's own Drop action is left untouched.
 local LEFT_CANNON_IDLE_ROTATION = -55
@@ -216,7 +295,7 @@ local function applyMizukiBeamReflectionHeight(player, laser)
     local extraGap = CANNON_FIRING_REFLECTION_SPAN
         * (player.SpriteScale.Y - 1)
     local shift = extraGap * 0.5
-    if math.abs(shift) <= 0.001 then
+    if math.abs(shift) <= Mizuki.RuntimeParameters.OffsetEpsilon then
         return 0
     end
     local verticalShift = Vector(0, shift)
@@ -244,7 +323,7 @@ local function resolveBeamGeometry(
 
     if targetPosition then
         local targetDirection = targetPosition - visualOrigin
-        if targetDirection:Length() > 0.01 then
+        if targetDirection:Length() > Mizuki.RuntimeParameters.AimDeadZone then
             originDirection = targetDirection:Normalized()
         end
     end
@@ -258,9 +337,9 @@ end
 
 local CHARGE_BAR_COLOR = Color(1, 1, 1, 1, 0, 0, 0)
 CHARGE_BAR_COLOR:SetColorize(
-    246 / 255,
-    171 / 255,
-    180 / 255,
+    Mizuki.WeaponParameters.TearTint.Red / Mizuki.RuntimeParameters.ColorByteMax,
+    Mizuki.WeaponParameters.TearTint.Green / Mizuki.RuntimeParameters.ColorByteMax,
+    Mizuki.WeaponParameters.TearTint.Blue / Mizuki.RuntimeParameters.ColorByteMax,
     1
 )
 local chargeBar = Sprite()
@@ -416,7 +495,7 @@ local function getChargeProfile(player, rawChargeItems)
         BaseFrames = baseFrames,
         BaseChargeFrames = baseChargeFrames,
         MaxChargeMultiplier = maxMultiplier,
-        MinFrames = hasChocolateMilk and 2
+        MinFrames = hasChocolateMilk and Mizuki.WeaponParameters.ChocolateMilkMinChargeFrames
             or math.max(1, math.ceil(baseFrames * minMultiplier)),
         MaxFrames = math.max(1, math.ceil(baseChargeFrames * maxMultiplier)),
         HasChocolateMilk = hasChocolateMilk,
@@ -456,7 +535,7 @@ local function getCursedEyeShotCount(player, charge, profile)
         return 1
     end
     if not profile.HasChocolateMilk then
-        return charge >= profile.MaxFrames and 5 or 1
+        return charge >= profile.MaxFrames and Mizuki.WeaponParameters.CursedEyeFullChargeShots or 1
     end
 
     -- Match the observed shot counts to the visible Chocolate Milk charge bar.
@@ -471,7 +550,7 @@ local function getCursedEyeShotCount(player, charge, profile)
 end
 
 local function getDisplayedFireRate(player)
-    return 30 / math.max(player.MaxFireDelay + 1, 0.001)
+    return Mizuki.RuntimeParameters.LogicFramesPerSecond / math.max(player.MaxFireDelay + 1, Mizuki.RuntimeParameters.MinimumFireInterval)
 end
 
 usesAutomaticBeam = function(player)
@@ -532,7 +611,7 @@ end
 
 local function hasRawShootingInput(player)
     local input = getRawShootingInput(player)
-    if input:Length() > 0.01 then
+    if input:Length() > Mizuki.RuntimeParameters.AimDeadZone then
         return true
     end
     return Options.MouseControl
@@ -543,7 +622,6 @@ end
 
 Mizuki.hasRawShootingInput = hasRawShootingInput
 Mizuki.CANNON_ATTACK_ORBIT_HEIGHT = CANNON_ATTACK_ORBIT_HEIGHT
-include("scripts/cannon_controls")
 
 local function getLudovicoFacingAnimation(player)
     local ring = player:GetData().MizukiLudovicoTechXProbe
@@ -551,7 +629,7 @@ local function getLudovicoFacingAnimation(player)
     if not hasRawShootingInput(player) then return nil end
 
     local offset = ring.Position - player.Position
-    if offset:Length() <= 0.01 then return nil end
+    if offset:Length() <= Mizuki.RuntimeParameters.DistanceEpsilon then return nil end
     if math.abs(offset.X) > math.abs(offset.Y) then
         return offset.X < 0 and "HeadLeft" or "HeadRight"
     end
@@ -611,13 +689,13 @@ end
 -- alone: those items aim at a point, so they stay exempt by construction.
 local EIGHT_WAY_AIM = {
     Vector(1, 0),
-    Vector(0.70710678, 0.70710678),
+    Vector(Mizuki.WeaponParameters.DiagonalAimComponent, Mizuki.WeaponParameters.DiagonalAimComponent),
     Vector(0, 1),
-    Vector(-0.70710678, 0.70710678),
+    Vector(-Mizuki.WeaponParameters.DiagonalAimComponent, Mizuki.WeaponParameters.DiagonalAimComponent),
     Vector(-1, 0),
-    Vector(-0.70710678, -0.70710678),
+    Vector(-Mizuki.WeaponParameters.DiagonalAimComponent, -Mizuki.WeaponParameters.DiagonalAimComponent),
     Vector(0, -1),
-    Vector(0.70710678, -0.70710678),
+    Vector(Mizuki.WeaponParameters.DiagonalAimComponent, -Mizuki.WeaponParameters.DiagonalAimComponent),
 }
 
 local function hasFreeAim(player)
@@ -660,12 +738,12 @@ local function applyDiagonalReleaseGrace(data, direction, enabled)
 
     local previous = data.MizukiAim
     local previousIsDiagonal = previous
-        and math.abs(previous.X) > 0.5
-        and math.abs(previous.Y) > 0.5
+        and math.abs(previous.X) > Mizuki.WeaponParameters.AimComponentThreshold
+        and math.abs(previous.Y) > Mizuki.WeaponParameters.AimComponentThreshold
     local currentIsHorizontal = math.abs(direction.X) > 0.5
-        and math.abs(direction.Y) < 0.5
+        and math.abs(direction.Y) < Mizuki.WeaponParameters.AimComponentThreshold
     local currentIsVertical = math.abs(direction.Y) > 0.5
-        and math.abs(direction.X) < 0.5
+        and math.abs(direction.X) < Mizuki.WeaponParameters.AimComponentThreshold
     local compatible = previousIsDiagonal and (
         currentIsHorizontal and previous.X * direction.X > 0
         or currentIsVertical and previous.Y * direction.Y > 0
@@ -678,7 +756,7 @@ local function applyDiagonalReleaseGrace(data, direction, enabled)
 
     local pending = data.MizukiPendingCardinalAim
     if pending
-        and (pending - direction):LengthSquared() < 0.0001
+        and (pending - direction):LengthSquared() < Mizuki.RuntimeParameters.DirectionMatchSquaredEpsilon
     then
         local frames = (data.MizukiPendingCardinalAimFrames or 1) + 1
         if frames > diagonalReleaseGraceFrames then
@@ -703,7 +781,7 @@ local function getShootingIntent(player, data, allowDiagonalGrace)
     if target then
         clearDiagonalReleaseGrace(data)
         local targetDirection = target.Position - player.Position
-        if targetDirection:Length() > 0.01 then
+        if targetDirection:Length() > Mizuki.RuntimeParameters.AimDeadZone then
             targetDirection = targetDirection:Normalized()
             data.MizukiLastShootDirection = targetDirection
             return true, targetDirection
@@ -718,7 +796,7 @@ local function getShootingIntent(player, data, allowDiagonalGrace)
     then
         clearDiagonalReleaseGrace(data)
         local mouseDirection = Input.GetMousePosition(true) - player.Position
-        if mouseDirection:Length() > 0.01 then
+        if mouseDirection:Length() > Mizuki.RuntimeParameters.AimDeadZone then
             mouseDirection = quantizeAim(player, mouseDirection)
             data.MizukiLastShootDirection = mouseDirection
             return true, mouseDirection
@@ -733,7 +811,7 @@ local function getShootingIntent(player, data, allowDiagonalGrace)
     end
 
     local shootingJoystick = player:GetShootingJoystick()
-    if shootingJoystick:Length() > 0.01 then
+    if shootingJoystick:Length() > Mizuki.RuntimeParameters.AimDeadZone then
         -- Use one direction source for keyboard and controller, matching the
         -- CuerLib input pattern. Analog Stick and Mom's Knife keep the
         -- continuous angle; ordinary aim snaps to eight directions. Both paths
@@ -809,7 +887,7 @@ local function getBeamDistance(player)
         return 0
     end
 
-    return math.max(40, BEAM_DISTANCE * player.TearRange / BASE_TEAR_RANGE)
+    return math.max(Mizuki.WeaponParameters.MinBeamDistance, BEAM_DISTANCE * player.TearRange / BASE_TEAR_RANGE)
 end
 
 -- Convert the final ShotSpeed stat into real beam thickness. At the normal
@@ -828,7 +906,7 @@ end
 -- item's own nine ticks at the engine's cadence, so 9 * 2 + 1 frames long, with
 -- the full panel on every tick.
 local BRIMSTONE_BEAM_TICK_COUNT = 9
-local BRIMSTONE_BEAM_DURATION = BRIMSTONE_BEAM_TICK_COUNT * 2 + 1
+local BRIMSTONE_BEAM_DURATION = BRIMSTONE_BEAM_TICK_COUNT * BEAM_DAMAGE_INTERVAL + 1
 local BRIMSTONE_BEAM_TOTAL_DAMAGE_MULTIPLIER = 9.00
 -- EntityLaser appends its own ending after Timeout reaches zero. Keep that
 -- ending inside the advertised total lifetime instead of adding it afterwards.
@@ -898,7 +976,7 @@ local function getMizukiFireRateProfile(player)
             Id = "brimstone",
             VanillaTearsMultiplier = player:HasCollectible(
                 CollectibleType.COLLECTIBLE_MONSTROS_LUNG
-            ) and 1 / 4.3 or 1,
+            ) and 1 / Mizuki.WeaponParameters.MonstrosLungTearsDivisor or 1,
             TearsModifier = 0,
             MizukiTearsMultiplier = 1,
         }
@@ -915,7 +993,7 @@ local function getMizukiFireRateProfile(player)
         -- weapon's x4.3 tear-delay penalty before applying Mizuki's rate.
         return {
             Id = "monstros_lung",
-            VanillaTearsMultiplier = 1 / 4.3,
+            VanillaTearsMultiplier = 1 / Mizuki.WeaponParameters.MonstrosLungTearsDivisor,
             TearsModifier = TEARS_MODIFIER,
             MizukiTearsMultiplier = mizukiTearsMultiplier,
         }
@@ -1072,7 +1150,7 @@ local function getExpectedCannonPairProfiles(player, stableShotCount)
             end
         end
     end
-    return profiles
+    return Mizuki.appendPersistentCannonEchoProfiles(player, profiles)
 end
 
 local function getExpectedCannonPairs(player)
@@ -1246,6 +1324,9 @@ function Mizuki.RefreshMizukiBeamAttackParams(
     laser,
     shootingDirection
 )
+    -- Delayed followers replay one attack; their shifted ticks/tail must not
+    -- advance the player's shared per-attack synergies a second time.
+    if beam.PersistentEchoMode == "automatic" then return end
     local damageFrame = laser.FrameCount % BEAM_DAMAGE_INTERVAL == 0
     if not damageFrame then
         return
@@ -1284,6 +1365,18 @@ local function updateActiveBeams(
             for index = #beams, 1, -1 do
                 local beam = beams[index]
                 local laser = beam.Laser
+                local delayedEcho = beam.PersistentEchoMode == "automatic"
+                local beamShootingHeld = shootingHeld
+                if delayedEcho then
+                    beamShootingHeld = Mizuki.shouldHoldAutomaticCannonEchoBeam(data, side, beam)
+                end
+                if beam.PersistentEchoMode and (not beam.Cannon or not beam.Cannon:Exists()
+                    or Mizuki.getPersistentCannonEchoMode(player) ~= beam.PersistentEchoMode
+                    or beam.Cannon:GetData().MizukiPersistentEchoMode ~= beam.PersistentEchoMode) then
+                    -- Only this explicitly identified extra beam is retired.
+                    -- Its real counterpart remains under the ordinary controller.
+                    if laser and laser:Exists() then laser:Remove() end
+                end
                 if beam.Ending then
                     if not laser or not laser:Exists() then
                         if not Mizuki.isCannonKnifeAttackActive
@@ -1318,7 +1411,7 @@ local function updateActiveBeams(
                     else
                         beginNaturalMizukiBeamEnding(beam)
                     end
-                elseif beam.Automatic and automaticMode and shootingHeld then
+                elseif beam.Automatic and automaticMode and beamShootingHeld then
                     -- Refresh only the full-width portion. The variant's native
                     -- 3 / 10-frame ending is reserved outside this countdown.
                     local activeDuration = beam.ActiveDuration
@@ -1331,7 +1424,7 @@ local function updateActiveBeams(
                     beam.Timeout = activeDuration
                     if laser and laser:Exists() then
                         laser.Timeout = activeDuration
-                        local currentAim = beam.MizukiAutoFire
+                        local currentAim = (delayedEcho or beam.MizukiAutoFire)
                             and beam.Cannon and beam.Cannon:Exists()
                             and beam.Cannon:GetData().MizukiCannonAim
                             or shootingDirection
@@ -1339,7 +1432,7 @@ local function updateActiveBeams(
                             and currentAim:Rotated(beam.DirectionOffset or 0)
                             or nil
                         if desiredDirection
-                            and (desiredDirection - beam.Direction):LengthSquared() > 0.0001
+                            and (desiredDirection - beam.Direction):LengthSquared() > Mizuki.RuntimeParameters.DirectionMatchSquaredEpsilon
                         then
                             beam.Direction = desiredDirection
                         end
@@ -1367,8 +1460,15 @@ local function updateActiveBeams(
                 data.MizukiLockedCannonPositions[side] = nil
                 data.MizukiLockedCannonAims[side] = nil
             else
-                activeSides = activeSides + 1
-                cannonFiringSides = cannonFiringSides + 1
+                for _, beam in ipairs(beams) do
+                    if beam.PersistentEchoMode ~= "automatic" then
+                        -- An echo's delayed tail never occupies a real cannon
+                        -- or postpones the player's next automatic volley.
+                        activeSides = activeSides + 1
+                        cannonFiringSides = cannonFiringSides + 1
+                        break
+                    end
+                end
             end
         end
     end
@@ -1525,7 +1625,7 @@ end
 -- Bobbing and the small idle lift remain real render motion and are untouched.
 local function getCannonScaleDepthCompensation(player, cannon)
     local scaleY = player.SpriteScale.Y
-    if math.abs(scaleY) < 0.001 then
+    if math.abs(scaleY) < Mizuki.RuntimeParameters.ScaleEpsilon then
         return 0
     end
 
@@ -1577,7 +1677,7 @@ local function updateCannonDepthOffset(cannon, targetDepthOffset, snap)
 
     local depthOffset = cannon.DepthOffset
         + (targetDepthOffset - cannon.DepthOffset) * CANNON_FOLLOW_SPEED
-    if math.abs(depthOffset - targetDepthOffset) < 0.5 then
+    if math.abs(depthOffset - targetDepthOffset) < Mizuki.WeaponParameters.CannonDepthSnapDistance then
         depthOffset = targetDepthOffset
     end
     cannon.DepthOffset = depthOffset
@@ -1637,7 +1737,7 @@ local function updateHorizontalCannonDepthOffset(
             or targetSortOffset
         sortOffset = sortOffset
             + (targetSortOffset - sortOffset) * CANNON_FOLLOW_SPEED
-        if math.abs(sortOffset - targetSortOffset) < 0.5 then
+        if math.abs(sortOffset - targetSortOffset) < Mizuki.WeaponParameters.CannonDepthSnapDistance then
             sortOffset = targetSortOffset
         end
     end
@@ -1655,7 +1755,7 @@ end
 --
 -- The layer lands at the entity position plus Sprite.Offset, so:
 --   * ordinary shadows use half the eased reflection distance, while a
---     stationary cannon keeps the charging-height shadow offset;
+--     deployed cannon keeps the charging-height shadow offset;
 --     the entity position contains no visual hover bob;
 --   * the shadow shares the cannon's player-scaled entity transform; Ludovico
 --     additionally includes the ring's visual height in its midpoint offset;
@@ -1677,7 +1777,7 @@ function Mizuki.refreshCannonMomKnifeShadow(cannon)
     cannon:GetSprite().Offset = shadowOffset
 end
 
-local function applyCannonShadowPose(player, cannon, hovering)
+local function applyCannonShadowPose(player, cannon, isDeployed)
     local cannonData = cannon:GetData()
     -- The entity's own position carries no hover bob (the bob rides the
     -- hand-drawn body instead). The span's target comes from the authored
@@ -1690,9 +1790,9 @@ local function applyCannonShadowPose(player, cannon, hovering)
     -- soon as the player grows.
     local offsetUnit = CANNON_ART_SCALE_MULTIPLIER
     local isIdle = cannonData.MizukiIsIdle
-    -- A stationary cannon keeps its shadow at charging height even when its
+    -- A deployed cannon keeps its shadow at charging height even when its
     -- body enters the idle pose. Reflection spacing remains unchanged.
-    local span = hovering
+    local span = isDeployed
         and getCannonReflectionSpan(player, false)
         or cannonData.MizukiReflectionSpan
         or getCannonReflectionSpan(player, isIdle)
@@ -1737,8 +1837,8 @@ local function applyCannonShadowPose(player, cannon, hovering)
 end
 
 local function updateCannonPositions(player, data, returnAim, snapSide)
-    local idleSwingPeriod = 150
-    local rotationReturnSpeed = 0.18
+    local idleSwingPeriod = Mizuki.WeaponParameters.CannonIdleSwingFrames
+    local rotationReturnSpeed = Mizuki.WeaponParameters.CannonRotationReturnRate
     prunePlayerCannons(data)
     local targetPositions = { {}, {} }
     local targetReticle = getMizukiTargetReticle(player, data)
@@ -1757,12 +1857,15 @@ local function updateCannonPositions(player, data, returnAim, snapSide)
     for side = 1, 2 do
         local beams = data.MizukiActiveBeams
             and data.MizukiActiveBeams[side]
-        local isFiring = beams and #beams > 0 or false
+        local isFiring = false
         local isFollowing = false
         local hasFiniteFollower = false
         if beams then
             for _, beam in ipairs(beams) do
-                if beam.FollowCannon then
+                if beam.PersistentEchoMode ~= "automatic" then
+                    isFiring = true
+                end
+                if beam.PersistentEchoMode ~= "automatic" and beam.FollowCannon then
                     isFollowing = true
                     if not beam.Automatic then
                         hasFiniteFollower = true
@@ -1808,7 +1911,7 @@ local function updateCannonPositions(player, data, returnAim, snapSide)
         else
             local angleDelta = (targetAngle - orbitAngle + 180) % 360 - 180
             orbitAngle = orbitAngle + angleDelta * CANNON_FOLLOW_SPEED
-            if math.abs(angleDelta) < 0.1 then
+            if math.abs(angleDelta) < Mizuki.WeaponParameters.CannonAngleSnapDegrees then
                 orbitAngle = targetAngle
             end
         end
@@ -1878,33 +1981,23 @@ local function updateCannonPositions(player, data, returnAim, snapSide)
     end
 
     local autoFireState = data.MizukiCannonAutoFireState
-    local hovering = autoFireState == "deployed"
-        or ((data.MizukiCannonHoverToggled == true)
-            ~= (data.MizukiCannonHoverTemporary == true))
-    local hoverPositions
-    if hovering then
-        hoverPositions = autoFireState == "deployed"
-            and data.MizukiCannonAutoFirePositions
-            or data.MizukiCannonHoverPositions or { {}, {} }
-        if autoFireState ~= "deployed" then
-            data.MizukiCannonHoverPositions = hoverPositions
-        end
+    local isDeployed = autoFireState == "deployed"
+    local deployedPositions = data.MizukiCannonAutoFirePositions
+    if isDeployed then
         for side = 1, 2 do
             for member, cannon in ipairs(data.MizukiCannons[side]) do
                 if cannon and cannon:Exists()
                     and not cannon:GetData().MizukiAwaitingInitialLayout
                 then
-                    local fixedPosition = hoverPositions[side][member]
+                    local fixedPosition = deployedPositions[side][member]
                     if not fixedPosition then
                         fixedPosition = Vector(cannon.Position.X, cannon.Position.Y)
-                        hoverPositions[side][member] = fixedPosition
+                        deployedPositions[side][member] = fixedPosition
                     end
                     targetPositions[side][member] = fixedPosition
                 end
             end
         end
-    else
-        data.MizukiCannonHoverPositions = nil
     end
 
     data.MizukiCannonPositions = { {}, {} }
@@ -1917,6 +2010,7 @@ local function updateCannonPositions(player, data, returnAim, snapSide)
             local cannonData = cannon:GetData()
             local pairProfile = data.MizukiExpectedCannonPairProfiles
                 and data.MizukiExpectedCannonPairProfiles[member]
+            Mizuki.applyPersistentCannonEchoProfile(cannon, pairProfile)
             cannonData.MizukiContactDamageMultiplier = pairProfile
                 and pairProfile.DamageMultiplier or 1
             Mizuki.updateCannonCollisionSize(
@@ -1930,8 +2024,7 @@ local function updateCannonPositions(player, data, returnAim, snapSide)
             local isFollowingFiring = sideFollowingStates[side]
             local bobOffset = Vector(
                 0,
-                math.sin(frame * 2 * math.pi / CANNON_FLOAT_PERIOD)
-                    * CANNON_FLOAT_AMPLITUDE
+                Mizuki.getCannonHoverOffset(frame)
             )
             local idleHeightOffset = isIdle
                 and getCannonIdleHeightOffset(player)
@@ -1948,8 +2041,8 @@ local function updateCannonPositions(player, data, returnAim, snapSide)
             -- only the body, charge circle and reflection consume
             -- MizukiBobOffsetY.
             cannonData.MizukiBobOffsetY = bobOffset.Y
-            local fixedPosition = hovering
-                and hoverPositions[side][member]
+            local fixedPosition = isDeployed
+                and deployedPositions[side][member]
             local desiredPosition = (fixedPosition or snapToFiringPosition)
                 and targetPosition
                 or (targetPosition + idleHeightOffset)
@@ -1965,7 +2058,12 @@ local function updateCannonPositions(player, data, returnAim, snapSide)
                 - (player.Position.Y + player.DepthOffset)
 
             local resolvedCannonPosition
-            if cannonData.MizukiAwaitingInitialLayout then
+            if cannonData.MizukiPersistentEchoMode == "automatic" then
+                -- The delayed source pose below owns this cannon's target.
+                -- Do not snap it to today's deployment/direct-aim layout or
+                -- add another elastic lag before replaying the recorded pose.
+                resolvedCannonPosition = desiredPosition
+            elseif cannonData.MizukiAwaitingInitialLayout then
                 -- The spawn coordinate and its interpolation history are both
                 -- temporary. Hold the Familiar at the first complete layout for
                 -- one full game frame before exposing it; showing it in the same
@@ -2084,7 +2182,7 @@ local function updateCannonPositions(player, data, returnAim, snapSide)
             else
                 smoothSpan = smoothSpan
                     + (targetSpan - smoothSpan) * CANNON_REFLECTION_SPAN_SPEED
-                if math.abs(smoothSpan - targetSpan) < 0.5 then
+                if math.abs(smoothSpan - targetSpan) < Mizuki.WeaponParameters.CannonReflectionSnapDistance then
                     smoothSpan = targetSpan
                 end
                 cannonData.MizukiReflectionSpan = smoothSpan
@@ -2104,7 +2202,7 @@ local function updateCannonPositions(player, data, returnAim, snapSide)
                 cannonData.MizukiIdleRotationOffset = cannonData.MizukiIdleRotationOffset
                     + (idleRotationTarget - cannonData.MizukiIdleRotationOffset)
                     * rotationReturnSpeed
-                if math.abs(cannonData.MizukiIdleRotationOffset - idleRotationTarget) < 0.1 then
+                if math.abs(cannonData.MizukiIdleRotationOffset - idleRotationTarget) < Mizuki.WeaponParameters.CannonAngleSnapDegrees then
                     cannonData.MizukiIdleRotationOffset = idleRotationTarget
                 end
             end
@@ -2187,7 +2285,7 @@ local function updateCannonPositions(player, data, returnAim, snapSide)
             cannonData.MizukiCannonBodyRotation = spriteRotation
             cannonData.MizukiBasePivotRenderOffset = basePivotRenderOffset
             sprite.Rotation = 0
-            applyCannonShadowPose(player, cannon, hovering)
+            applyCannonShadowPose(player, cannon, isDeployed)
             -- Hide the engine's own draw; Mizuki:RenderCannon replaces it in
             -- the same render slot and draws the water reflection separately.
             -- Alpha is used instead of Visible on purpose:
@@ -2195,6 +2293,13 @@ local function updateCannonPositions(player, data, returnAim, snapSide)
             -- the render callback that re-draws it.
             sprite.Color = getCannonHiddenColor()
             cannonData.MizukiCannonAim = cannonAim
+            resolvedCannonPosition = Mizuki.updateAutomaticCannonEchoPose(
+                player, data, cannon, resolvedCannonPosition, member, side, frame
+            )
+            if cannonData.MizukiPersistentEchoMode == "automatic" then
+                updateCannonBodyGraphics(cannon, cannonData)
+                applyCannonShadowPose(player, cannon, isDeployed)
+            end
             data.MizukiCannonPositions[side][member] = Vector(
                 resolvedCannonPosition.X,
                 resolvedCannonPosition.Y
@@ -2227,11 +2332,15 @@ local function updateCannonPositions(player, data, returnAim, snapSide)
                         -- position. Keep their fired direction and distance;
                         -- live reticle tracking remains an automatic-beam rule.
                         local target = beam.Automatic
+                            and not beam.PersistentEchoMode
                             and not beam.MizukiAutoFire and targetReticle or nil
                         local directionOffset = beam.DirectionOffset or 0
                         local baseDirection = beam.Direction:Rotated(
                             -directionOffset
                         )
+                        if beam.PersistentEchoMode == "automatic" then
+                            baseDirection = cannonData.MizukiCannonAim or baseDirection
+                        end
                         local originCorrection
                         beam.Direction, originCorrection = resolveBeamGeometry(
                             visualOrigin,
@@ -2249,7 +2358,7 @@ local function updateCannonPositions(player, data, returnAim, snapSide)
                         local reflectionDepthShift =
                             applyMizukiBeamReflectionHeight(player, laser)
                         laser.Velocity = Vector.Zero
-                        laser.DepthOffset = cannon.DepthOffset - 5
+                        laser.DepthOffset = cannon.DepthOffset - Mizuki.WeaponParameters.BeamDepthBehindCannon
                             - hitboxOffset.Y
                             - originCorrection.Y
                             - reflectionDepthShift
@@ -2309,7 +2418,7 @@ local function getMizukiTransientBeamEffects(player, blockedSources)
 
     if not blockedSources[TRANSIENT_BEAM_SOURCE_BOOK_WORM]
         and player:HasPlayerForm(PlayerForm.PLAYERFORM_BOOK_WORM)
-        and player:GetDropRNG():RandomFloat() < 0.25
+        and player:GetDropRNG():RandomFloat() < Mizuki.WeaponParameters.BookWormBonusChance
     then
         effects.BookWormBonus = 1
         effects.Sources[TRANSIENT_BEAM_SOURCE_BOOK_WORM] = { 0 }
@@ -2320,7 +2429,7 @@ local function getMizukiTransientBeamEffects(player, blockedSources)
         CollectibleType.COLLECTIBLE_LOKIS_HORNS
     )
     if momsEye and not blockedSources[TRANSIENT_BEAM_SOURCE_MOMS_EYE] then
-        local chance = math.max(0, math.min(1, 0.5 + player.Luck * 0.1))
+        local chance = math.max(0, math.min(1, Mizuki.WeaponParameters.MomsEyeBaseChance + player.Luck * Mizuki.WeaponParameters.MomsEyeLuckStep))
         if player:GetCollectibleRNG(
             CollectibleType.COLLECTIBLE_MOMS_EYE
         ):RandomFloat() < chance then
@@ -2335,7 +2444,7 @@ local function getMizukiTransientBeamEffects(player, blockedSources)
     if lokisHorns
         and not blockedSources[TRANSIENT_BEAM_SOURCE_LOKIS_HORNS]
     then
-        local chance = math.max(0, math.min(1, 0.25 + player.Luck * 0.05))
+        local chance = math.max(0, math.min(1, Mizuki.WeaponParameters.LokisHornsBaseChance + player.Luck * Mizuki.WeaponParameters.LokisHornsLuckStep))
         if player:GetCollectibleRNG(
             CollectibleType.COLLECTIBLE_LOKIS_HORNS
         ):RandomFloat() < chance then
@@ -2358,7 +2467,7 @@ local function getMizukiTransientBeamEffects(player, blockedSources)
             CollectibleType.COLLECTIBLE_EYE_SORE
         )
         local angles = {}
-        for _ = 1, rng:RandomInt(4) do
+        for _ = 1, rng:RandomInt(Mizuki.WeaponParameters.EyeSoreCountBound) do
             table.insert(angles, rng:RandomFloat() * 360)
         end
         if #angles > 0 then
@@ -2373,7 +2482,7 @@ end
 local function appendUniqueBeamAngle(angles, angleOffset)
     for _, existingAngle in ipairs(angles) do
         local difference = (existingAngle - angleOffset + 180) % 360 - 180
-        if math.abs(difference) < 0.0001 then
+        if math.abs(difference) < Mizuki.RuntimeParameters.AngleMatchEpsilon then
             return
         end
     end
@@ -2432,8 +2541,8 @@ local function getMizukiBeamAngleOffsets(player)
         local rng = player:GetCollectibleRNG(
             CollectibleType.COLLECTIBLE_MONSTROS_LUNG
         )
-        local minExtra = 3 + 2 * (lungCount - 1)
-        local maxExtra = 5 + 3 * (lungCount - 1)
+        local minExtra = Mizuki.WeaponParameters.LungMinExtraBeams + Mizuki.WeaponParameters.LungMinExtraPerCopy * (lungCount - 1)
+        local maxExtra = Mizuki.WeaponParameters.LungMaxExtraBeams + Mizuki.WeaponParameters.LungMaxExtraPerCopy * (lungCount - 1)
         local extraCount = minExtra + rng:RandomInt(maxExtra - minExtra + 1)
         for _ = 1, extraCount do
             table.insert(angles, rng:RandomFloat() * 360)
@@ -2490,7 +2599,7 @@ local function fireMizukiWeaponBeam(
             damageMultiplier
         )
 
-        if widthScale < 2.5
+        if widthScale < Mizuki.WeaponParameters.ThickBrimstoneWidthThreshold
             or nativeLaser.Variant ~= LaserVariant.THICK_RED
         then
             return nativeLaser
@@ -2543,7 +2652,9 @@ local function fireMizukiBeam(
     automatic,
     forcedSide,
     finiteVolleyId,
-    damageMultiplierOverride
+    damageMultiplierOverride,
+    echoOnlyAngles,
+    echoAttack
 )
     local data = player:GetData()
     local deployedAutoFire = data.MizukiCannonAutoFireState == "deployed"
@@ -2618,12 +2729,19 @@ local function fireMizukiBeam(
     -- per-tick factors are combined with it at the native firing call.
     local damageMultiplier = damageMultiplierOverride
         or chargeDamageMultiplier
-    local beamAngleOffsets = getMizukiBeamAngleOffsets(player)
+    local beamAngleOffsets = echoOnlyAngles or getMizukiBeamAngleOffsets(player)
+    -- Record resolved attacks, never re-enter this firing controller to replay
+    -- them. Echoes must not change real cannon sides, occupancy or charge.
+    local echoShot = isFiniteShot and Mizuki.beginCannonEchoShot
+        and Mizuki.beginCannonEchoShot(player, firingSides[1], finiteVolleyId)
+        or nil
     local targetReticle = not deployedAutoFire
         and getMizukiTargetReticle(player, data) or nil
-    tryFireImmaculateHeartTear(player, direction)
-    advanceLeadPencil(player, direction)
-    data.MizukiExtraAttackFrame = Game():GetFrameCount()
+    if not echoOnlyAngles then
+        tryFireImmaculateHeartTear(player, direction)
+        advanceLeadPencil(player, direction)
+        data.MizukiExtraAttackFrame = Game():GetFrameCount()
+    end
     for _, side in ipairs(firingSides) do
         local origins = data.MizukiCannonPositions[side]
         if origins and #origins > 0 then
@@ -2653,142 +2771,167 @@ local function fireMizukiBeam(
                     and data.MizukiCannons[side][member]
                 local hasFiringCannon = firingCannon
                     and firingCannon:Exists()
-                local memberDirection = deployedAutoFire
-                    and hasFiringCannon
-                    and Mizuki.getCannonAutoFireAim(player, data, member)
-                    or direction
-
-                if isFiniteShot then
-                    if not followCannon then
-                        data.MizukiLockedCannonPositions[side][member] = Vector(
-                            origin.X,
-                            origin.Y
-                        )
-                    end
-                    local firingAim = deployedAutoFire and memberDirection
-                        or firingCannon
-                        and firingCannon:GetData().MizukiCannonAim
-                        or direction
-                    data.MizukiLockedCannonAims[side].MemberAims[member] = Vector(
-                        firingAim.X,
-                        firingAim.Y
-                    )
-                end
-
-                local visualOrigin = origin
-                if hasFiringCannon then
-                    local firingCannonData = firingCannon:GetData()
-                    visualOrigin = origin
-                        + getCannonBeamPivotRenderOffset(
-                            player, firingCannonData
-                        )
-                    if isFiniteShot then
-                        firingCannonData.MizukiLockedFiringDepthOffset =
-                            firingCannon.DepthOffset
-                    end
-                end
-
-                -- Eye-specific item bonuses remain native. Player-sourced
-                -- Technology and Brimstone lasers apply them per damage tick;
-                -- pre-applying them here would duplicate the native bonus.
-                local apiDamageMultiplier = damageMultiplier
-                    * damagePerTickMultiplier
-                for _, angleOffset in ipairs(beamAngleOffsets) do
-                    local target = targetReticle
-                    local beamDirection, originCorrection = resolveBeamGeometry(
-                        visualOrigin,
-                        memberDirection,
-                        angleOffset,
-                        target and target.Position or nil
-                    )
-                    local hitboxOffset = Vector(0, BEAM_HITBOX_Y_OFFSET)
-                    local hitboxOrigin = visualOrigin
-                        + hitboxOffset
-                        + originCorrection
-                    local currentBeamDistance = beamDistance
-                    if target then
-                        currentBeamDistance = math.max(
-                            1,
-                            (
-                                target.Position
-                                - (visualOrigin + originCorrection)
-                            ):Length()
-                        )
-                    end
-                    local laser = fireMizukiWeaponBeam(
-                        player,
-                        hitboxOrigin,
-                        beamDirection,
-                        side == 1,
-                        apiDamageMultiplier,
-                        beamWidthScale
-                    )
-                    laser.DisableFollowParent = true
-                    if followCannon and firingCannon then
-                        laser.Parent = firingCannon
-                    end
-                    laser.Position = hitboxOrigin
-                    laser.PositionOffset = -hitboxOffset
-                    local reflectionDepthShift =
-                        applyMizukiBeamReflectionHeight(player, laser)
-                    laser.Velocity = Vector.Zero
-                    laser.DepthOffset = (firingCannon
-                        and firingCannon.DepthOffset
-                        or CANNON_DEPTH_OFFSET) - 5
-                        - hitboxOffset.Y
-                        - originCorrection.Y
-                        - reflectionDepthShift
-                    laser.Timeout = beamActiveDuration
-                    laser:SetOneHit(false)
-                    laser:SetMaxDistance(currentBeamDistance)
-                    local laserData = laser:GetData()
-                    laser.TearFlags = addOccultHoming(player, laser.TearFlags)
-                        & ~MIZUKI_FORBIDDEN_TEAR_FLAGS
-
-                    laserData.MizukiBeam = true
-                    laserData.MizukiBeamOwner = player
-                    laserData.MizukiBeamWidthScale = beamWidthScale
-                    laserData.MizukiBeamAutomatic = automatic
-                    if laserData.MizukiRecoverBeamDamageMultiplier then
-                        laserData.MizukiAwaitingNativeDamageRefresh = true
-                        laserData.MizukiLastAdjustedCollisionDamage =
-                            laser.CollisionDamage
-                    end
-
-                    local beam = {
-                        Laser = laser,
-                        Origin = Vector(origin.X, origin.Y),
-                        Direction = Vector(beamDirection.X, beamDirection.Y),
-                        DirectionOffset = angleOffset,
-                        Distance = currentBeamDistance,
-                        Timeout = beamActiveDuration,
-                        ActiveDuration = beamActiveDuration,
-                        TotalDuration = beamDuration + beamEndFrames,
-                        EndFrames = beamEndFrames,
-                        DamageMultiplier = damageMultiplier,
-                        DamagePerTickMultiplier = damagePerTickMultiplier,
-                        LeftEye = side == 1,
-                        Automatic = automatic,
-                        FollowCannon = followCannon,
-                        Cannon = firingCannon,
-                        MizukiAutoFire = deployedAutoFire,
-                        FiniteVolleyId = finiteVolleyId,
-                    }
-                    table.insert(data.MizukiActiveBeams[side], beam)
-                    if isFiniteShot
+                local persistentEchoMode = hasFiringCannon
+                    and firingCannon:GetData().MizukiPersistentEchoMode or nil
+                if (echoOnlyAngles and persistentEchoMode == "automatic")
+                    or (not echoOnlyAngles and persistentEchoMode ~= "automatic") then
+                    local memberDirection = deployedAutoFire
                         and hasFiringCannon
-                        and Mizuki.fireCannonMomKnife
-                    then
-                        Mizuki.fireCannonMomKnife(
-                            firingCannon,
-                            beam,
-                            charge,
-                            chargeProfile.BaseChargeFrames
+                        and Mizuki.getCannonAutoFireAim(player, data, member)
+                        or direction
+                    if persistentEchoMode == "automatic" then
+                        memberDirection = firingCannon:GetData().MizukiCannonAim or memberDirection
+                    end
+
+                    if isFiniteShot then
+                        if not followCannon then
+                            data.MizukiLockedCannonPositions[side][member] = Vector(
+                                origin.X,
+                                origin.Y
+                            )
+                        end
+                        local firingAim = deployedAutoFire and memberDirection
+                            or firingCannon
+                            and firingCannon:GetData().MizukiCannonAim
+                            or direction
+                        data.MizukiLockedCannonAims[side].MemberAims[member] = Vector(
+                            firingAim.X,
+                            firingAim.Y
                         )
                     end
-                end
+
+                    local visualOrigin = origin
+                    if hasFiringCannon then
+                        local firingCannonData = firingCannon:GetData()
+                        visualOrigin = origin
+                            + getCannonBeamPivotRenderOffset(
+                                player, firingCannonData
+                            )
+                        if isFiniteShot then
+                            firingCannonData.MizukiLockedFiringDepthOffset =
+                                firingCannon.DepthOffset
+                        end
+                    end
+
+                    -- Eye-specific item bonuses remain native. Player-sourced
+                    -- Technology and Brimstone lasers apply them per damage tick;
+                    -- pre-applying them here would duplicate the native bonus.
+                    local apiDamageMultiplier = damageMultiplier
+                        * damagePerTickMultiplier
+                        * (persistentEchoMode and Mizuki.CannonEchoDamageMultiplier or 1)
+                    for _, angleOffset in ipairs(beamAngleOffsets) do
+                        local target = not persistentEchoMode and targetReticle or nil
+                        local beamDirection, originCorrection = resolveBeamGeometry(
+                            visualOrigin,
+                            memberDirection,
+                            angleOffset,
+                            target and target.Position or nil
+                        )
+                        local hitboxOffset = Vector(0, BEAM_HITBOX_Y_OFFSET)
+                        local hitboxOrigin = visualOrigin
+                            + hitboxOffset
+                            + originCorrection
+                        local currentBeamDistance = beamDistance
+                        if target then
+                            currentBeamDistance = math.max(
+                                1,
+                                (
+                                    target.Position
+                                    - (visualOrigin + originCorrection)
+                                ):Length()
+                            )
+                        end
+                        local laser = fireMizukiWeaponBeam(
+                            player,
+                            hitboxOrigin,
+                            beamDirection,
+                            side == 1,
+                            apiDamageMultiplier,
+                            beamWidthScale
+                        )
+                        laser.DisableFollowParent = true
+                        if followCannon and firingCannon then
+                            laser.Parent = firingCannon
+                        end
+                        laser.Position = hitboxOrigin
+                        laser.PositionOffset = -hitboxOffset
+                        local reflectionDepthShift =
+                            applyMizukiBeamReflectionHeight(player, laser)
+                        laser.Velocity = Vector.Zero
+                        laser.DepthOffset = (firingCannon
+                            and firingCannon.DepthOffset
+                            or CANNON_DEPTH_OFFSET) - Mizuki.WeaponParameters.BeamDepthBehindCannon
+                            - hitboxOffset.Y
+                            - originCorrection.Y
+                            - reflectionDepthShift
+                        laser.Timeout = beamActiveDuration
+                        laser:SetOneHit(false)
+                        laser:SetMaxDistance(currentBeamDistance)
+                        local laserData = laser:GetData()
+                        laser.TearFlags = addOccultHoming(player, laser.TearFlags)
+                            & ~MIZUKI_FORBIDDEN_TEAR_FLAGS
+
+                        laserData.MizukiBeam = true
+                        laserData.MizukiBeamOwner = player
+                        laserData.MizukiBeamWidthScale = beamWidthScale
+                        laserData.MizukiBeamAutomatic = automatic
+                        if persistentEchoMode then
+                            laser.Color = Mizuki.getPersistentEchoColor(laser.Color)
+                        end
+                        if laserData.MizukiRecoverBeamDamageMultiplier then
+                            laserData.MizukiAwaitingNativeDamageRefresh = true
+                            laserData.MizukiLastAdjustedCollisionDamage =
+                                laser.CollisionDamage
+                        end
+
+                        local beam = {
+                            Laser = laser,
+                            Origin = Vector(origin.X, origin.Y),
+                            Direction = Vector(beamDirection.X, beamDirection.Y),
+                            DirectionOffset = angleOffset,
+                            Distance = currentBeamDistance,
+                            Timeout = beamActiveDuration,
+                            ActiveDuration = beamActiveDuration,
+                            TotalDuration = beamDuration + beamEndFrames,
+                            EndFrames = beamEndFrames,
+                            DamageMultiplier = damageMultiplier,
+                            DamagePerTickMultiplier = damagePerTickMultiplier,
+                            LeftEye = side == 1,
+                            Automatic = automatic,
+                            FollowCannon = followCannon,
+                            Cannon = firingCannon,
+                            PersistentEchoMode = persistentEchoMode,
+                            PersistentEchoSourceSeed = echoAttack and echoAttack.SourceSeed,
+                            PersistentEchoSourceHash = echoAttack and echoAttack.SourceHash,
+                            MizukiAutoFire = deployedAutoFire,
+                            FiniteVolleyId = finiteVolleyId,
+                        }
+                        table.insert(data.MizukiActiveBeams[side], beam)
+                        if isFiniteShot
+                            and hasFiringCannon
+                            and Mizuki.fireCannonMomKnife
+                        then
+                            Mizuki.fireCannonMomKnife(
+                                firingCannon,
+                                beam,
+                                charge,
+                                chargeProfile.BaseChargeFrames
+                            )
+                        end
+                        if echoShot and Mizuki.captureCannonEchoBeam then
+                            Mizuki.captureCannonEchoBeam(
+                                echoShot, beam, charge, chargeProfile.BaseChargeFrames
+                            )
+                        end
+                    end
+                end -- Originals fire now; automatic echoes use the delayed sample.
             end
         end
+    end
+    if automatic and not echoOnlyAngles then
+        -- Position layout was sampled earlier this frame. Add this newly fired
+        -- attack to that SAME frame rather than introducing a seventh frame.
+        Mizuki.captureAutomaticCannonEchoAttacks(player, data)
     end
     return finiteVolleyId
 end
@@ -2843,7 +2986,7 @@ end
 local function appendLudovicoTriggeredAngle(entries, angleOffset, source)
     for _, entry in ipairs(entries) do
         local difference = (entry.Angle - angleOffset + 180) % 360 - 180
-        if math.abs(difference) < 0.0001 then
+        if math.abs(difference) < Mizuki.RuntimeParameters.AngleMatchEpsilon then
             -- One rendered laser can satisfy several simultaneous sources. Keep
             -- every owner on the record so angle de-duplication cannot release
             -- one source's per-shot lock early.
@@ -2881,7 +3024,7 @@ local function fireLudovicoTriggeredBeams(player, data)
     local nextFrame = data.MizukiLudovicoTriggerNextFrame
     local previousInterval = data.MizukiLudovicoTriggerInterval
     if nextFrame and previousInterval
-        and math.abs(previousInterval - interval) > 0.0001
+        and math.abs(previousInterval - interval) > Mizuki.RuntimeParameters.FrameComparisonEpsilon
     then
         local remaining = math.max(0, nextFrame - frame)
         nextFrame = frame + remaining * interval / previousInterval
@@ -2890,7 +3033,7 @@ local function fireLudovicoTriggeredBeams(player, data)
     if not nextFrame then
         nextFrame = frame
     end
-    if frame + 0.0001 < nextFrame then
+    if frame + Mizuki.RuntimeParameters.FrameComparisonEpsilon < nextFrame then
         data.MizukiLudovicoTriggerNextFrame = nextFrame
         return
     end
@@ -2972,7 +3115,7 @@ local function fireLudovicoTriggeredBeams(player, data)
                         local reflectionDepthShift =
                             applyMizukiBeamReflectionHeight(player, laser)
                         laser.Velocity = Vector.Zero
-                        laser.DepthOffset = cannon.DepthOffset - 5
+                        laser.DepthOffset = cannon.DepthOffset - Mizuki.WeaponParameters.BeamDepthBehindCannon
                             - hitboxOffset.Y
                             - reflectionDepthShift
                         laser.Timeout = beamActiveDuration
@@ -2992,6 +3135,9 @@ local function fireLudovicoTriggeredBeams(player, data)
                         laserData.MizukiLudovicoTriggeredBeam = true
                         laserData.MizukiLudovicoTriggeredSources =
                             angleEntry.Sources
+                        if cannonData.MizukiPersistentEchoMode then
+                            laser.Color = Mizuki.getPersistentEchoColor(laser.Color)
+                        end
                         if laserData.MizukiRecoverBeamDamageMultiplier then
                             laserData.MizukiAwaitingNativeDamageRefresh = true
                             laserData.MizukiLastAdjustedCollisionDamage =
@@ -3086,11 +3232,13 @@ local function removeLudovicoTechXProbe(data)
     data.MizukiLudovicoKnifeResyncReady = nil
 end
 
-include("scripts/cannon_contact")
+include("scripts/cannons")
 
 function Mizuki.updateLudovicoCannons(player, data, ring)
     prunePlayerCannons(data)
     data.MizukiCannonPositions = { {}, {} }
+    data.MizukiAutomaticEchoHistory = nil
+    local frame = Game():GetFrameCount()
 
     local angle = data.MizukiLudovicoCannonOrbitAngle or -90
     angle = (angle
@@ -3100,7 +3248,7 @@ function Mizuki.updateLudovicoCannons(player, data, ring)
 
     local ringRadius = ring.Radius
     if not ringRadius or ringRadius <= 0 then
-        ringRadius = 60
+        ringRadius = Mizuki.WeaponParameters.LudovicoDefaultRingRadius
     end
     -- Gameplay geometry follows the laser entity's collision centre. Render
     -- offsets stay visual-only, matching the ring whose hitbox sits slightly
@@ -3136,7 +3284,7 @@ function Mizuki.updateLudovicoCannons(player, data, ring)
             if cannon and cannon:Exists() then
                 local orbitDirection = Vector.FromAngle(
                     angle
-                        + (member - 1) * pairStep
+                        + (pairProfile.OrbitSlot or (member - 1)) * pairStep
                         + (side - 1) * 180
                 )
                 local tangentDirection = orbitDirection:Rotated(90)
@@ -3144,6 +3292,7 @@ function Mizuki.updateLudovicoCannons(player, data, ring)
                     + orbitDirection * orbitRadius
                 cannon.Velocity = Vector.Zero
                 local cannonData = cannon:GetData()
+                Mizuki.applyPersistentCannonEchoProfile(cannon, pairProfile)
                 local collisionRadius = Mizuki.updateCannonCollisionSize(
                     cannon,
                     pairProfile.ScaleMultiplier,
@@ -3338,8 +3487,8 @@ Mizuki:AddCallback(
 -- shooting input. Mizuki is blindfolded, so move the native Tech X ring directly
 -- without an intermediate tear carrier.
 local function updateLudovicoTechXProbe(player, data)
-    local myReflectionPullSpeedMultiplier = 1
-    local myReflectionPullDistanceResponse = 0.05
+    local myReflectionPullSpeedMultiplier = Mizuki.WeaponParameters.ReflectionPullSpeedMultiplier
+    local myReflectionPullDistanceResponse = Mizuki.WeaponParameters.ReflectionPullDistanceResponse
     local hasLudovico = player:HasCollectible(
         CollectibleType.COLLECTIBLE_LUDOVICO_TECHNIQUE
     )
@@ -3389,7 +3538,7 @@ local function updateLudovicoTechXProbe(player, data)
         ring = player:FireTechXLaser(
             player.Position,
             Vector.Zero,
-            60,
+            Mizuki.WeaponParameters.LudovicoDefaultRingRadius,
             player,
             1
         ):ToLaser()
@@ -3444,8 +3593,8 @@ local function updateLudovicoTechXProbe(player, data)
         control = Input.GetMousePosition(true) - ring.Position
     end
     local targetVelocity = Vector.Zero
-    if control:Length() > 0.01 then
-        targetVelocity = control:Normalized() * player.ShotSpeed * 8
+    if control:Length() > Mizuki.RuntimeParameters.AimDeadZone then
+        targetVelocity = control:Normalized() * player.ShotSpeed * Mizuki.WeaponParameters.LudovicoMoveSpeed
     end
     if player:HasCollectible(CollectibleType.COLLECTIBLE_MY_REFLECTION) then
         -- Vanilla Ludovico + My Reflection continuously draws the controlled
@@ -3453,7 +3602,7 @@ local function updateLudovicoTechXProbe(player, data)
         -- than replacing it; taper it near the player to prevent oscillation.
         local toPlayer = player.Position - ring.Position
         local distance = toPlayer:Length()
-        if distance > 0.01 then
+        if distance > Mizuki.RuntimeParameters.DistanceEpsilon then
             local pullSpeed = math.min(
                 player.ShotSpeed
                     * myReflectionPullSpeedMultiplier,
@@ -3469,7 +3618,8 @@ local function updateLudovicoTechXProbe(player, data)
     -- callbacks, which would erase the turn history and make direction snap.
     local smoothedVelocity = ringData.MizukiLudovicoSmoothedVelocity
         or ring.Velocity
-    smoothedVelocity = smoothedVelocity * 0.8 + targetVelocity * 0.2
+    smoothedVelocity = smoothedVelocity * (1 - Mizuki.WeaponParameters.LudovicoVelocityResponse)
+        + targetVelocity * Mizuki.WeaponParameters.LudovicoVelocityResponse
     ringData.MizukiLudovicoSmoothedVelocity = smoothedVelocity
     ring.Velocity = smoothedVelocity
 
@@ -3530,10 +3680,6 @@ function Mizuki:UpdateWeapon(player)
         data.MizukiHasShootingInput = false
         data.MizukiCannonAim = Vector(0, -1)
         data.MizukiCannonOrbitAngles = nil
-        data.MizukiCannonHoverHeldFrames = nil
-        data.MizukiCannonHoverTemporary = nil
-        data.MizukiCannonHoverToggled = nil
-        data.MizukiCannonHoverPositions = nil
         data.MizukiCannonAutoFireState = nil
         data.MizukiCannonAutoFirePositions = nil
         data.MizukiCannonAutoFireInputHeld = nil
@@ -3549,7 +3695,6 @@ function Mizuki:UpdateWeapon(player)
     end
     data.MizukiLockedCannonPositions = data.MizukiLockedCannonPositions or {}
     data.MizukiLockedCannonAims = data.MizukiLockedCannonAims or {}
-    Mizuki.updateCannonHoverInput(player, data)
     Mizuki.updateCannonAutoFireInput(player, data)
     local kidneyStoneBurst = Mizuki.updateKidneyStoneBurst(player, data)
     local automatic = usesAutomaticBeam(player)
@@ -3604,6 +3749,7 @@ function Mizuki:UpdateWeapon(player)
         and not data.MizukiDirectAimActive
     data.MizukiDirectAimActive = directAimActive
     updateCannonPositions(player, data, returnAim)
+    Mizuki.completeAutomaticEchoBeams(player, data)
     Mizuki.finishCannonAutoFireReturn(player, data)
     -- Cursed Eye releases one independently rolled attack per frame. Ignore
     -- input until the stored burst has completely left the cannons.
@@ -3616,23 +3762,21 @@ function Mizuki:UpdateWeapon(player)
     end
 
     if not automatic and not chargedBeam then
-        -- The default weapon fires immediately. Its fire-delay clock starts on
-        -- the firing frame and runs alongside the four-tick beam, so the beam's
-        -- lifetime is not added to the stat-defined interval.
+        -- Count remaining logical updates, not a global-frame deadline: rewind
+        -- must never leave firing locked to a discarded future. The pause guard
+        -- above freezes this timer. Beam lifetime is not added to the interval.
         data.MizukiCharge = 0
         data.MizukiNeptunusHeldFrames = nil
         data.MizukiAim = nil
         data.MizukiChargeBarFullFrames = nil
 
-        local frame = Game():GetFrameCount()
         local interval = math.max(player.MaxFireDelay + 1, 1)
-        local nextFrame = data.MizukiDirectBeamNextFrame
+        local cooldown = math.max(0, (data.MizukiDirectBeamCooldown or 0) - 1)
         local previousInterval = data.MizukiDirectBeamInterval
-        if nextFrame and previousInterval
-            and math.abs(previousInterval - interval) > 0.0001
+        if previousInterval
+            and math.abs(previousInterval - interval) > Mizuki.RuntimeParameters.FrameComparisonEpsilon
         then
-            local remaining = math.max(0, nextFrame - frame)
-            nextFrame = frame + remaining * interval / previousInterval
+            cooldown = cooldown * interval / previousInterval
         end
 
         local storedDirectShot = neptunusEnabled
@@ -3641,7 +3785,7 @@ function Mizuki:UpdateWeapon(player)
             and Mizuki.getNeptunusFreeSide(data)
         if data.MizukiHasShootingInput
             and (not storedDirectShot or freeDirectSide)
-            and Mizuki.canFireNeptunusDirect(data, frame, nextFrame)
+            and Mizuki.canFireNeptunusDirect(data, cooldown)
         then
             fireMizukiBeam(
                 player,
@@ -3655,9 +3799,9 @@ function Mizuki:UpdateWeapon(player)
             if freeDirectSide then
                 Mizuki.recordNeptunusFiringSide(data, freeDirectSide)
             end
-            nextFrame = frame + interval
+            cooldown = interval
         end
-        data.MizukiDirectBeamNextFrame = nextFrame
+        data.MizukiDirectBeamCooldown = cooldown
         data.MizukiDirectBeamInterval = interval
 
         if not data.MizukiHasShootingInput
@@ -3668,7 +3812,7 @@ function Mizuki:UpdateWeapon(player)
         return
     end
 
-    data.MizukiDirectBeamNextFrame = nil
+    data.MizukiDirectBeamCooldown = nil
     data.MizukiDirectBeamInterval = nil
 
     if automatic and activeSides >= 2 then
@@ -3864,7 +4008,7 @@ function Mizuki:ThrottleLudovicoTechXDamage(entity, amount, damageFlags, source)
         return
     end
 
-    if math.abs(schedule.Interval - interval) > 0.0001 then
+    if math.abs(schedule.Interval - interval) > Mizuki.RuntimeParameters.FrameComparisonEpsilon then
         -- Preserve the completed fraction of the current cooldown when Tears
         -- changes instead of granting or deleting a whole hit.
         local remaining = math.max(0, schedule.NextFrame - frame)
@@ -3873,7 +4017,7 @@ function Mizuki:ThrottleLudovicoTechXDamage(entity, amount, damageFlags, source)
         schedule.Interval = interval
     end
 
-    if frame + 0.0001 < schedule.NextFrame then
+    if frame + Mizuki.RuntimeParameters.FrameComparisonEpsilon < schedule.NextFrame then
         return false
     end
 
@@ -4057,7 +4201,7 @@ function Mizuki:ApplyLaserWidth(laser)
             local shouldAdjustDamage = true
             if laserData.MizukiAwaitingNativeDamageRefresh then
                 if lastAdjusted
-                    and math.abs(nativeDamage - lastAdjusted) < 0.0001
+                    and math.abs(nativeDamage - lastAdjusted) < Mizuki.RuntimeParameters.DamageComparisonEpsilon
                 then
                     -- The copied first-frame value is already scaled.
                     shouldAdjustDamage = false
@@ -4065,7 +4209,7 @@ function Mizuki:ApplyLaserWidth(laser)
                     laserData.MizukiAwaitingNativeDamageRefresh = nil
                 end
             elseif lastAdjusted
-                and math.abs(nativeDamage - lastAdjusted) < 0.0001
+                and math.abs(nativeDamage - lastAdjusted) < Mizuki.RuntimeParameters.DamageComparisonEpsilon
                 and laserData.MizukiLastNativeCollisionDamage
             then
                 nativeDamage = laserData.MizukiLastNativeCollisionDamage
@@ -4086,7 +4230,7 @@ function Mizuki:ApplyLaserWidth(laser)
         return
     end
 
-    if laser.FrameCount < 2 then
+    if laser.FrameCount < Mizuki.RuntimeParameters.NativeLaserInitFrames then
         return
     end
 
@@ -4206,7 +4350,6 @@ function Mizuki:ApplyTearsMultiplier(player, cacheFlag)
     end
 
     if isMizuki(player) then
-        local capsuleDelta = getCapsuleState(player).RewindStatDelta
         if cacheFlag == CacheFlag.CACHE_DAMAGE then
             -- Technology Zero's damage restoration is an independent passive:
             -- higher-priority weapon modes such as Brimstone may replace its
@@ -4216,36 +4359,20 @@ function Mizuki:ApplyTearsMultiplier(player, cacheFlag)
             ) and TECHNOLOGY_ZERO_DAMAGE_MULTIPLIER
                 or DEFAULT_DAMAGE_MULTIPLIER
             player.Damage = player.Damage * damageMultiplier
-            if capsuleDelta then
-                player.Damage = player.Damage + capsuleDelta.Damage
-            end
         elseif cacheFlag == CacheFlag.CACHE_FIREDELAY then
             local profile = getMizukiFireRateProfile(player)
             local currentTears = 30 / (player.MaxFireDelay + 1)
             local preWeaponTears = currentTears / profile.VanillaTearsMultiplier
             local finalTears = (preWeaponTears + profile.TearsModifier) * profile.MizukiTearsMultiplier
-            if capsuleDelta then
-                finalTears = finalTears + capsuleDelta.Tears
-            end
-            player.MaxFireDelay = math.max(0, 30 / finalTears - 1)
+            player.MaxFireDelay = math.max(0, Mizuki.RuntimeParameters.LogicFramesPerSecond / finalTears - 1)
         elseif cacheFlag == CacheFlag.CACHE_SPEED then
             player.MoveSpeed = player.MoveSpeed + MOVE_SPEED_MODIFIER
-            if capsuleDelta then
-                player.MoveSpeed = player.MoveSpeed + capsuleDelta.MoveSpeed
-            end
-        elseif cacheFlag == CacheFlag.CACHE_SHOTSPEED and capsuleDelta then
-            player.ShotSpeed = player.ShotSpeed + capsuleDelta.ShotSpeed
-        elseif cacheFlag == CacheFlag.CACHE_RANGE and capsuleDelta then
-            player.TearRange = player.TearRange + capsuleDelta.TearRange
         elseif cacheFlag == CacheFlag.CACHE_TEARFLAG
             and player:HasCollectible(CollectibleType.COLLECTIBLE_MOMS_KNIFE)
         then
             player.TearFlags = player.TearFlags | TearFlags.TEAR_SPECTRAL
         elseif cacheFlag == CacheFlag.CACHE_LUCK then
             player.Luck = player.Luck + LUCK_MODIFIER
-            if capsuleDelta then
-                player.Luck = player.Luck + capsuleDelta.Luck
-            end
         elseif cacheFlag == CacheFlag.CACHE_FAMILIARS then
             local cannonsPerSide = getExpectedCannonPairs(player)
             player:GetData().MizukiExpectedCannonPairs = cannonsPerSide
@@ -4373,10 +4500,6 @@ function Mizuki:ResetCannonsForNewRoom()
             data.MizukiActiveBeams = {}
             data.MizukiLockedCannonPositions = {}
             data.MizukiLockedCannonAims = {}
-            data.MizukiCannonHoverHeldFrames = nil
-            data.MizukiCannonHoverTemporary = nil
-            data.MizukiCannonHoverToggled = nil
-            data.MizukiCannonHoverPositions = nil
             data.MizukiCannonAutoFireState = nil
             data.MizukiCannonAutoFirePositions = nil
             data.MizukiCannonAutoFireInputHeld = nil
@@ -4634,6 +4757,9 @@ function Mizuki:RenderCannon(cannon, renderOffset, renderAfterLudovicoRing)
         originalColor.R, originalColor.G, originalColor.B,
         1, originalColor.RO, originalColor.GO, originalColor.BO
     )
+    if cannonData.MizukiPersistentEchoMode then
+        bodySprite.Color = Mizuki.getPersistentEchoColor(bodySprite.Color)
+    end
     -- The 2nd and 3rd arguments are clamps, not offset and scale.
     local bodyRenderPosition = Isaac.WorldToScreen(
         worldPosition + Vector(0, bodyBobY)
@@ -4764,16 +4890,16 @@ function Mizuki:RenderChargeBar(cannon, renderOffset)
 
     local fullFrames = data.MizukiChargeBarFullFrames
     if fullFrames then
-        if fullFrames <= 12 then
+        if fullFrames <= Mizuki.WeaponParameters.ChargeBarStartFrames then
             chargeBar:Play("StartCharged", true)
             chargeBar:SetFrame("StartCharged", fullFrames - 1)
         else
             chargeBar:Play("Charged", true)
-            chargeBar:SetFrame("Charged", (fullFrames - 13) % 6)
+            chargeBar:SetFrame("Charged", (fullFrames - (Mizuki.WeaponParameters.ChargeBarStartFrames + 1)) % Mizuki.WeaponParameters.ChargeBarLoopFrames)
         end
     else
         local frame = math.floor(
-            math.min(charge / getChargeProfile(player).MaxFrames, 1) * 100
+            math.min(charge / getChargeProfile(player).MaxFrames, 1) * Mizuki.WeaponParameters.ChargeBarProgressFrames
         )
         chargeBar:Play("Charging", true)
         chargeBar:SetFrame("Charging", frame)
@@ -4824,14 +4950,14 @@ tryFireImmaculateHeartTear = function(player, direction)
     end
     if player:GetCollectibleRNG(
         CollectibleType.COLLECTIBLE_IMMACULATE_HEART
-    ):RandomFloat() >= 0.25 then
+    ):RandomFloat() >= Mizuki.WeaponParameters.ImmaculateHeartChance then
         return
     end
 
     local shotDirection = direction and direction:Normalized() or Vector(0, -1)
     local tear = player:FireTear(
         player.Position,
-        shotDirection:Resized(player.ShotSpeed * 10),
+        shotDirection:Resized(player.ShotSpeed * Mizuki.WeaponParameters.TearBaseSpeed),
         false,
         true,
         false,
@@ -4858,10 +4984,10 @@ advanceLeadPencil = function(player, direction)
 
     local data = player:GetData()
     data.MizukiLeadPencilShots = (data.MizukiLeadPencilShots or 0) + 1
-    if data.MizukiLeadPencilShots < 15 then
+    if data.MizukiLeadPencilShots < Mizuki.WeaponParameters.PencilTriggerShots then
         return
     end
-    data.MizukiLeadPencilShots = data.MizukiLeadPencilShots - 15
+    data.MizukiLeadPencilShots = data.MizukiLeadPencilShots - Mizuki.WeaponParameters.PencilTriggerShots
 
     local shotDirection = direction and direction:Normalized() or Vector(0, -1)
     local rng = player:GetCollectibleRNG(
@@ -4870,10 +4996,10 @@ advanceLeadPencil = function(player, direction)
     local hasBloodClot = player:HasCollectible(
         CollectibleType.COLLECTIBLE_BLOOD_CLOT
     )
-    for _ = 1, 12 do
+    for _ = 1, Mizuki.WeaponParameters.PencilTearCount do
         local velocity = shotDirection
-            :Rotated(rng:RandomFloat() * 60 - 30)
-            :Resized(player.ShotSpeed * 10 * (0.5 + rng:RandomFloat() * 0.75))
+            :Rotated(rng:RandomFloat() * Mizuki.WeaponParameters.PencilSpreadDegrees - Mizuki.WeaponParameters.PencilSpreadDegrees * 0.5)
+            :Resized(player.ShotSpeed * Mizuki.WeaponParameters.TearBaseSpeed * (Mizuki.WeaponParameters.PencilSpeedMin + rng:RandomFloat() * Mizuki.WeaponParameters.PencilSpeedRandomSpan))
         local tear = player:FireTear(
             player.Position,
             velocity,
@@ -4883,9 +5009,9 @@ advanceLeadPencil = function(player, direction)
             player,
             1
         )
-        tear.Scale = tear.Scale * (0.75 + rng:RandomFloat() * 0.5)
-        tear.Height = -5 - rng:RandomFloat() * 3
-        tear.FallingSpeed = -10 - rng:RandomFloat() * 10
+        tear.Scale = tear.Scale * (Mizuki.WeaponParameters.PencilScaleMin + rng:RandomFloat() * Mizuki.WeaponParameters.PencilScaleRandomSpan)
+        tear.Height = Mizuki.WeaponParameters.PencilBaseHeight - rng:RandomFloat() * Mizuki.WeaponParameters.PencilHeightRandomSpan
+        tear.FallingSpeed = Mizuki.WeaponParameters.PencilBaseFallingSpeed - rng:RandomFloat() * Mizuki.WeaponParameters.PencilFallingSpeedRandomSpan
         tear.FallingAcceleration = 1 + rng:RandomFloat()
         -- Lead Pencil normally turns half of its ordinary tears into the
         -- highlighted blood-tear sprite. Blood Clot is a separate exception:
@@ -4893,7 +5019,7 @@ advanceLeadPencil = function(player, direction)
         -- variants (or mixing BLUE and BLOOD base sprites).
         if hasBloodClot then
             tear.Color = LEAD_PENCIL_BLOOD_CLOT_COLOR
-        elseif tear.Variant == TearVariant.BLUE and rng:RandomFloat() < 0.5 then
+        elseif tear.Variant == TearVariant.BLUE and rng:RandomFloat() < Mizuki.WeaponParameters.PencilBloodTearChance then
             tear:ChangeVariant(TearVariant.BLOOD)
         end
         tear:GetData().MizukiLeadPencilTear = true
@@ -4904,6 +5030,8 @@ end
 -- budget), so everything they share travels through the Mizuki table; each file
 -- aliases what it needs at its own top.
 Mizuki.isMizuki = isMizuki
+Mizuki.CANNON_ART_SCALE_MULTIPLIER = CANNON_ART_SCALE_MULTIPLIER
+Mizuki.CANNON_FIRING_REFLECTION_SPAN = CANNON_FIRING_REFLECTION_SPAN
 Mizuki.BEAM_DAMAGE_INTERVAL = BEAM_DAMAGE_INTERVAL
 Mizuki.MIZUKI_FORBIDDEN_TEAR_FLAGS = MIZUKI_FORBIDDEN_TEAR_FLAGS
 Mizuki.usesAutomaticBeam = usesAutomaticBeam
@@ -4919,7 +5047,6 @@ Mizuki.IMMACULATE_HEART_FALLING_ACCELERATION = IMMACULATE_HEART_FALLING_ACCELERA
 Mizuki.getCapsuleState = getCapsuleState
 Mizuki.EXPERIMENTAL_CAPSULE_PICKUP_SUBTYPE = EXPERIMENTAL_CAPSULE_PICKUP_SUBTYPE
 Mizuki.GLOWING_HOUR_GLASS = GLOWING_HOUR_GLASS
-Mizuki.HOUR_GLASS = HOUR_GLASS
 Mizuki.CAPSULE_STAT_CACHE_FLAGS = CAPSULE_STAT_CACHE_FLAGS
 Mizuki.LEAD_PENCIL_BLOOD_CLOT_COLOR = LEAD_PENCIL_BLOOD_CLOT_COLOR
 Mizuki.capsuleStates = capsuleStates
@@ -4933,10 +5060,10 @@ Mizuki.SACK_HEAD = SACK_HEAD
 
 -- Order matters only in that the capsule file publishes the pocket helpers the
 -- fan file aliases.
-include("scripts/kidney_stone")
+include("scripts/weapon_synergies")
 include("scripts/epic_fetus")
-include("scripts/isaacs_tears")
-include("scripts/neptunus")
 include("scripts/experimental_capsule")
 include("scripts/fan")
 include("scripts/moms_knife")
+include("scripts/cannon_echo")
+Mizuki.RegisterPickupLocalization()

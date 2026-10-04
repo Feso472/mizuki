@@ -19,6 +19,9 @@ local EPIC_FETUS_COOLDOWN_MULTIPLIER = 3
 local EPIC_FETUS_MAX_ACTIVE_STRIKES = 16
 local EPIC_FETUS_GRID_HALF_SIZE = 20
 local EPIC_FETUS_RING_MIN_THICKNESS = 10
+local EPIC_FETUS_GRID_TARGET_RADIUS = 30
+local GRID_PRIORITY_RING = 1
+local GRID_PRIORITY_CANNON = 2
 
 local function getEpicFetusStrikes(data)
     local strikes = data.MizukiEpicFetusStrikes
@@ -172,7 +175,7 @@ local function getEpicFetusGridTarget(laser)
     -- first poop, TNT, rock or wall reached by the straight laser ray.
     local hitPosition = room:GetLaserTarget(laser.Position, direction)
     local hitDistance = (hitPosition - laser.Position):Length()
-    if hitDistance > endpointDistance + 30 then return nil end
+    if hitDistance > endpointDistance + EPIC_FETUS_GRID_TARGET_RADIUS then return nil end
 
     -- The returned hit point can sit on either side of the grid boundary.
     -- Probe a small distance into the obstruction to resolve its actual cell.
@@ -190,7 +193,7 @@ local function getEpicFetusGridTarget(laser)
     for slot = 0, 7 do
         local position = getEpicFetusDoorSlotTarget(room, slot)
         if position
-            and (position - hitPosition):LengthSquared() <= 30 * 30
+            and (position - hitPosition):LengthSquared() <= EPIC_FETUS_GRID_TARGET_RADIUS * EPIC_FETUS_GRID_TARGET_RADIUS
         then
             return position, hitDistance
         end
@@ -309,7 +312,7 @@ local function captureLudovicoEpicFetusGeometry(
         RingPosition = Vector(ring.Position.X, ring.Position.Y),
         RingRadius = ring.Radius and ring.Radius > 0
             and ring.Radius
-            or 60,
+            or Mizuki.WeaponParameters.LudovicoDefaultRingRadius,
         RingThickness = math.max(
             ring.Size or 0,
             EPIC_FETUS_RING_MIN_THICKNESS
@@ -329,12 +332,12 @@ local function considerLudovicoGridPosition(
             - EPIC_FETUS_GRID_HALF_SIZE
         if overlap <= 0
             and (not candidate
-                or candidate.Priority < 2
-                or candidate.Priority == 2 and overlap < candidate.Distance)
+                or candidate.Priority < GRID_PRIORITY_CANNON
+                or candidate.Priority == GRID_PRIORITY_CANNON and overlap < candidate.Distance)
         then
             candidate = {
                 Position = Vector(contactPosition.X, contactPosition.Y),
-                Priority = 2,
+                Priority = GRID_PRIORITY_CANNON,
                 Distance = overlap,
             }
         end
@@ -346,12 +349,12 @@ local function considerLudovicoGridPosition(
         - EPIC_FETUS_GRID_HALF_SIZE
     if ringOverlap <= 0
         and (not candidate
-            or candidate.Priority < 1
-            or candidate.Priority == 1 and ringOverlap < candidate.Distance)
+            or candidate.Priority < GRID_PRIORITY_RING
+            or candidate.Priority == GRID_PRIORITY_RING and ringOverlap < candidate.Distance)
     then
         candidate = {
             Position = Vector(contactPosition.X, contactPosition.Y),
-            Priority = 1,
+            Priority = GRID_PRIORITY_RING,
             Distance = ringOverlap,
         }
     end

@@ -9,6 +9,9 @@ AGENTS.md
 dev_backups/
 tools/
 
+# Offline item catalog is a local development tool.
+catalog/
+
 # Editable sprite source files; exported game assets stay tracked
 *.ase
 *.aseprite

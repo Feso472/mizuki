@@ -1,0 +1,28 @@
+<AnimatedActor>
+    <Info CreatedBy="Mizuki" Version="1" Fps="30" />
+    <Content>
+        <Spritesheets>
+            <Spritesheet Id="0" Path="player_icons.png" />
+        </Spritesheets>
+        <Layers>
+            <Layer Id="0" Name="Portrait" SpritesheetId="0" />
+        </Layers>
+        <Nulls />
+        <Events />
+    </Content>
+    <Animations DefaultAnimation="Mizuki">
+        <Animation Name="Mizuki" FrameNum="1" Loop="false">
+            <RootAnimation>
+                <Frame XPosition="0" YPosition="0" XScale="100" YScale="100" Delay="1" Visible="true" RedTint="255" GreenTint="255" BlueTint="255" AlphaTint="255" RedOffset="0" GreenOffset="0" BlueOffset="0" Rotation="0" Interpolated="false" />
+            </RootAnimation>
+            <LayerAnimations>
+                <LayerAnimation LayerId="0" Visible="true">
+                    <!-- The portrait is the second 32x32 cell; its visible 24x22 pixels render at about 16x15. -->
+                    <Frame XPosition="0" YPosition="0" XPivot="4" YPivot="10" XCrop="32" YCrop="0" Width="32" Height="32" XScale="66.666667" YScale="66.666667" Delay="1" Visible="true" RedTint="255" GreenTint="255" BlueTint="255" AlphaTint="255" RedOffset="0" GreenOffset="0" BlueOffset="0" Rotation="0" Interpolated="false" />
+                </LayerAnimation>
+            </LayerAnimations>
+            <NullAnimations />
+            <Triggers />
+        </Animation>
+    </Animations>
+</AnimatedActor>
