@@ -1,5 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <entities anm2root="gfx/" version="5">
+    <!-- C Section echo: separate identity, no gifts or projectile blocking. -->
+    <entity name="Mizuki Echo Fan"
+            anm2path="entities/mizuki/xbt.anm2"
+            id="3" variant="9204" subtype="0"
+            baseHP="0" boss="0" champion="0" collisionDamage="0"
+            collisionMass="0" collisionRadius="0" friction="1"
+            numGridCollisionPoints="0" shadowSize="11" stageHP="0" />
     <!-- Separate from real cannons: never reconciled by CheckFamiliar. -->
     <entity name="Mizuki Echo Cannon"
             anm2path="entities/mizuki/mizuki_cannon.anm2"
@@ -50,6 +57,6 @@
             collisionRadius="13"
             friction="1"
             numGridCollisionPoints="0"
-            shadowSize="10"
+            shadowSize="11"
             stageHP="0" />
 </entities>

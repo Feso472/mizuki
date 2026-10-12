@@ -282,6 +282,7 @@ end
 -- region Fan EID
 do
     local FAN_EID_SYNERGIES = {
+        { Key = "C_SECTION", Item = CollectibleType.COLLECTIBLE_C_SECTION },
         { Key = "BFFS_BLOCK", Item = CollectibleType.COLLECTIBLE_BFFS },
         { Key = "BFFS_CHANCE", Item = CollectibleType.COLLECTIBLE_BFFS },
         { Key = "LUCKY_FOOT", Item = CollectibleType.COLLECTIBLE_LUCKY_FOOT },
@@ -317,6 +318,7 @@ do
                 EID:AddConditional(synergy.Item, function(eid, descObj)
                     local player = eid:ClosestPlayerTo(descObj.Entity)
                     return player and player:HasCollectible(Mizuki.FanItem)
+                        and (synergy.Key ~= "C_SECTION" or Mizuki.isMizuki(player))
                 end, synergy.Key, {
                     locTable = "MizukiFanReverseConditions", noFallback = false,
                     bulletpoint = "Collectible" .. Mizuki.FanItem, layer = -index,
@@ -333,6 +335,7 @@ do
                 -- another co-op player's inventory must not add a false bonus.
                 local player = eid:ClosestPlayerTo(descObj.Entity)
                 return player and player:HasCollectible(synergy.Item)
+                    and (synergy.Key ~= "C_SECTION" or Mizuki.isMizuki(player))
             end, synergy.Key, {
                 locTable = "MizukiFanConditions", noFallback = false,
                 uniqueID = "MizukiFan_" .. synergy.Key,
@@ -362,6 +365,9 @@ do
             end,
             function(descObj)
                 local player = EID:ClosestPlayerTo(descObj.Entity)
+                descObj.Description = descObj.Description:gsub("{MIZUKI_FAN_BLOCK_CHANCE}",
+                    string.format("%.0f", Mizuki.GetFanBlockChance(player)
+                        * Mizuki.RuntimeParameters.PercentScale))
                 local chance = Mizuki.GetFanRoomClearChance(player) * Mizuki.RuntimeParameters.PercentScale
                 -- Match EID's native luck line, highlighting the current luck.
                 local luckLine = EID:getDescriptionEntry("LuckModifier")

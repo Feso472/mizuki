@@ -12,6 +12,11 @@ tools/
 # Offline item catalog is a local development tool.
 catalog/
 
+# Local research, checks and runtime diagnostics
+docs/
+tests/
+scripts/*_trace.lua
+
 # Editable sprite source files; exported game assets stay tracked
 *.ase
 *.aseprite

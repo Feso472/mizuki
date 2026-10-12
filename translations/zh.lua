@@ -27,13 +27,14 @@ return {
     },
     Fan = {
         Name = "小博兔",
-        EID = "50%概率抵挡敌方泪弹{MIZUKI_FAN_BFFS_BLOCK}"
+        EID = "{MIZUKI_FAN_BLOCK_CHANCE}%概率抵挡敌方泪弹{MIZUKI_FAN_BFFS_BLOCK}{MIZUKI_FAN_C_SECTION}"
             .. "#每层掉落1个角色最需要的掉落物"
             .. "#清理房间后，有概率额外掉落1个角色最需要的掉落物"
             .. "{MIZUKI_FAN_BFFS_CHANCE}{MIZUKI_FAN_LUCKY_FOOT}"
             .. "#{{Luck}} {{NoLB}}{MIZUKI_FAN_LUCK_LINE}"
             .. "#资源充足时更容易生成高级掉落物{MIZUKI_FAN_MOMS_BOX}{MIZUKI_FAN_SACK_HEAD}",
         Synergies = {
+            C_SECTION = "弥月持有时变为给博兔，从给博兔发射胎儿；本体消弹概率变为75%，阻挡半径额外扩大50%，可与大宝叠加；每个胎儿有10%概率抵挡敌方泪弹",
             BFFS_BLOCK = "阻挡半径扩大50%",
             BFFS_CHANCE = "清房掉落概率额外增加20%",
             LUCKY_FOOT = "幸运提供的清房掉落概率翻倍",
@@ -41,6 +42,7 @@ return {
             SACK_HEAD = "普通掉落物有20%概率替换为福袋",
         },
         ReverseSynergies = {
+            C_SECTION = "弥月的小博兔变为给博兔并发射胎儿；本体消弹概率变为75%，阻挡半径额外扩大50%，可与大宝叠加；每个胎儿有10%概率抵挡敌方泪弹",
             BFFS_BLOCK = "阻挡半径扩大50%，清房掉落概率额外增加20%",
             LUCKY_FOOT = "幸运提供的清房掉落概率翻倍",
             MOMS_BOX = "小博兔掉落的饰品有10%概率变为金饰品",

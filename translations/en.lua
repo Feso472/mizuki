@@ -27,13 +27,14 @@ return {
     },
     Fan = {
         Name = "Xiaobotu",
-        EID = "50% chance to block enemy projectiles{MIZUKI_FAN_BFFS_BLOCK}"
+        EID = "{MIZUKI_FAN_BLOCK_CHANCE}% chance to block enemy projectiles{MIZUKI_FAN_BFFS_BLOCK}{MIZUKI_FAN_C_SECTION}"
             .. "#Drops 1 pickup the character needs most each floor"
             .. "#Chance to drop 1 extra pickup the character needs most after clearing a room"
             .. "{MIZUKI_FAN_BFFS_CHANCE}{MIZUKI_FAN_LUCKY_FOOT}"
             .. "#{{Luck}} {{NoLB}}{MIZUKI_FAN_LUCK_LINE}"
             .. "#More likely to generate higher-tier pickups when well supplied{MIZUKI_FAN_MOMS_BOX}{MIZUKI_FAN_SACK_HEAD}",
         Synergies = {
+            C_SECTION = "For Mizuki, becomes Geibotu and fires fetuses; 75% familiar block chance, an extra 50% blocking radius stacking with BFFS, and 10% projectile block chance per fetus",
             BFFS_BLOCK = "50% larger blocking radius",
             BFFS_CHANCE = "An extra +20% room-clear drop chance",
             LUCKY_FOOT = "Doubles the luck-based portion of the room-clear drop chance",
@@ -41,6 +42,7 @@ return {
             SACK_HEAD = "Basic pickups have a 20% chance to be replaced with a sack",
         },
         ReverseSynergies = {
+            C_SECTION = "Mizuki's Xiaobotu becomes Geibotu and fires fetuses; 75% familiar block chance, an extra 50% blocking radius stacking with BFFS, and 10% projectile block chance per fetus",
             BFFS_BLOCK = "50% larger blocking radius and an extra +20% room-clear drop chance",
             LUCKY_FOOT = "Doubles the luck-based portion of the room-clear drop chance",
             MOMS_BOX = "Trinkets dropped by Xiaobotu have a 10% chance to become golden",

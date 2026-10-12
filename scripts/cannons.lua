@@ -1,5 +1,78 @@
 -- Shared cannon controls and native contact damage.
 
+-- Guillotine heads remain engine-owned. Their extra cannon pairs keep an idle
+-- pose and contact damage, without firing; item/echo copies retain their roles.
+do
+    function Mizuki.getGuillotineHeads(player)
+        local heads = {}
+        local ownerHash = GetPtrHash(player)
+        for _, entity in ipairs(Isaac.FindByType(
+            EntityType.ENTITY_FAMILIAR, FamiliarVariant.GUILLOTINE, -1, false, false
+        )) do
+            local head = entity:ToFamiliar()
+            if head and head.Player and GetPtrHash(head.Player) == ownerHash then
+                heads[#heads + 1] = head
+            end
+        end
+        -- Native Guillotine updates publish the firing origin as TearsOffset.
+        -- Index/InitSeed order does not identify that head. Match the native
+        -- origin; retain the previous identity only when distances are tied.
+        table.sort(heads, function(a, b) return a.Index < b.Index end)
+        local data = player:GetData()
+        local primary = data.MizukiGuillotinePrimaryHead
+        if primary and not primary:Exists() then primary = nil end
+        local nearestDistance = math.huge
+        local nativeOrigin = player.Position + player.TearsOffset
+        for _, head in ipairs(heads) do
+            local distance = head.Position:DistanceSquared(nativeOrigin)
+            if distance < nearestDistance
+                or (distance == nearestDistance and primary
+                    and GetPtrHash(head) == GetPtrHash(primary))
+            then
+                nearestDistance = distance
+                data.MizukiGuillotinePrimaryHead = head
+            end
+        end
+        primary = #heads > 0 and data.MizukiGuillotinePrimaryHead or nil
+        for index, head in ipairs(heads) do
+            if primary and GetPtrHash(head) == GetPtrHash(primary)
+            then
+                table.remove(heads, index)
+                table.insert(heads, 1, head)
+                break
+            end
+        end
+        data.MizukiGuillotinePrimaryHead = heads[1]
+        return heads
+    end
+
+    function Mizuki.appendGuillotineCannonProfiles(player, profiles)
+        -- Ludovico already owns the cannon pairs as projectile geometry.
+        if player:HasCollectible(CollectibleType.COLLECTIBLE_LUDOVICO_TECHNIQUE)
+            and not player:HasCollectible(CollectibleType.COLLECTIBLE_C_SECTION)
+        then return profiles end
+        local heads = Mizuki.getGuillotineHeads(player)
+        local count = math.max(#heads,
+            player:GetCollectibleNum(CollectibleType.COLLECTIBLE_GUILLOTINE))
+        for index = 2, count do
+            profiles[#profiles + 1] = {
+                GuillotineNonFiring = true, GuillotineHeadIndex = index,
+                DamageMultiplier = 1, ScaleMultiplier = 1,
+            }
+        end
+        return profiles
+    end
+
+    function Mizuki.applyGuillotineCannonProfile(cannon, profile, heads)
+        local data = cannon:GetData()
+        data.MizukiGuillotineNonFiring = profile
+            and profile.GuillotineNonFiring == true or false
+        data.MizukiGuillotineHead = heads[profile and profile.GuillotineHeadIndex or 1]
+        data.MizukiGuillotineDisplaySuppressed = data.MizukiGuillotineNonFiring
+            and not data.MizukiGuillotineHead
+    end
+end
+
 -- region Deployment controls
 do
     -- Double-tap auto-fire deployment and recall. This is a separate Lua
@@ -61,6 +134,7 @@ do
                 for member, cannon in ipairs(data.MizukiCannons[side] or {}) do
                     if cannon and cannon:Exists()
                         and not cannon:GetData().MizukiAwaitingInitialLayout
+                        and not cannon:GetData().MizukiGuillotineNonFiring
                     then
                         positions[side][member] = Vector(
                             cannon.Position.X, cannon.Position.Y
@@ -120,9 +194,12 @@ do
         local cannonData = cannon:GetData()
         local player = cannon.Player
         if cannonData.MizukiAwaitingInitialLayout
-            or cannonData.MizukiIsIdle
+            or cannonData.MizukiGuillotineDisplaySuppressed
+            or (cannonData.MizukiIsIdle and not cannonData.MizukiGuillotineNonFiring)
             or not player or not player:Exists()
-            or player:HasCollectible(CollectibleType.COLLECTIBLE_MOMS_KNIFE)
+            or (not cannonData.MizukiGuillotineNonFiring
+                and (player:HasCollectible(CollectibleType.COLLECTIBLE_C_SECTION)
+                    or Mizuki.cannonUsesKnifeWeapon(player)))
             or not collider:IsVulnerableEnemy()
             or collider:HasEntityFlags(EntityFlag.FLAG_FRIENDLY)
         then

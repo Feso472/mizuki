@@ -60,6 +60,7 @@ local function spawnEpicFetusRocket(player, strike)
     ):ToEffect()
     rocket.Parent = target
     rocket.Timeout = EPIC_FETUS_FALL_FRAMES
+    Mizuki.rollSpecialBrimstone(rocket, player)
     strike.Rocket = rocket
 end
 
@@ -128,7 +129,8 @@ local function getMizukiBeamOwnerFromDamageSource(source)
     end
 
     local familiar = entity:ToFamiliar()
-    if familiar and familiar.Variant == Mizuki.CannonVariant then
+    if familiar and (familiar.Variant == Mizuki.CannonVariant
+        or familiar.Variant == Mizuki.CannonEchoVariant) then
         local owner = familiar.Player
         if owner and owner:Exists() and isMizuki(owner) then return owner end
     end
@@ -183,7 +185,8 @@ local function getEpicFetusGridTarget(laser)
     for _, offset in ipairs(probeOffsets) do
         local position = hitPosition + direction * offset
         local grid = room:GetGridEntityFromPos(position)
-        if grid and EPIC_FETUS_GRID_TARGET_TYPES[grid:GetType()] then
+        if grid and grid.CollisionClass ~= GridCollisionClass.COLLISION_NONE
+            and EPIC_FETUS_GRID_TARGET_TYPES[grid:GetType()] then
             return Vector(grid.Position.X, grid.Position.Y), hitDistance
         end
     end
@@ -343,6 +346,7 @@ local function considerLudovicoGridPosition(
         end
     end
 
+    if not geometry.RingPosition then return candidate end
     local ringDistance = contactPosition:Distance(geometry.RingPosition)
     local ringOverlap = math.abs(ringDistance - geometry.RingRadius)
         - geometry.RingThickness
@@ -418,6 +422,23 @@ local function getLudovicoEpicFetusCandidate(player, frame)
     return nil, nil
 end
 
+-- Dr. Fetus and Epic Fetus share the same physical grids and valid door slots.
+-- Each caller supplies its own collision geometry and trigger lifetime.
+function Mizuki.getFetusContactGridTarget(position, radius)
+    local candidate = getLudovicoEpicFetusGridCandidate({
+        Cannons = {{Position = position, Radius = math.max(0, radius or 0)}},
+    })
+    return candidate and candidate.Position
+end
+
+function Mizuki.getFetusRingGridTarget(laser)
+    local candidate = getLudovicoEpicFetusGridCandidate({
+        Cannons = {}, RingPosition = laser.Position, RingRadius = laser.Radius,
+        RingThickness = math.max(laser.Size or 0, EPIC_FETUS_RING_MIN_THICKNESS),
+    })
+    return candidate and candidate.Position
+end
+
 local function appendCenteredBeamAngles(angles, center, count, totalSpread)
     if count <= 1 then
         table.insert(angles, center)
@@ -438,6 +459,7 @@ end
 Mizuki.appendCenteredBeamAngles = appendCenteredBeamAngles
 Mizuki.getMizukiBeamOwnerFromDamageSource = getMizukiBeamOwnerFromDamageSource
 Mizuki.queueEpicFetusGridTarget = queueEpicFetusGridTarget
+Mizuki.getFetusBeamGridTarget = getEpicFetusGridTarget
 Mizuki.canStartEpicFetusStrike = canStartEpicFetusStrike
 Mizuki.queueLudovicoEpicFetusEnemy = queueLudovicoEpicFetusEnemy
 Mizuki.captureLudovicoEpicFetusGeometry =

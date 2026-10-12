@@ -1,5 +1,210 @@
 -- Small weapon compatibility rules. Large independent weapons keep their own files.
 
+-- Dr. Fetus: one native bomb at the first enemy/grid hit by each attack entity.
+-- Ownership is resolved from the actual source, never from a volley-wide flag.
+do
+    local function ownerOf(entity)
+        if not entity then return nil end
+        local player = entity:ToPlayer()
+        if player then return player end
+        local familiar = entity:ToFamiliar()
+        return familiar and familiar.Player or nil
+    end
+
+    local pendingGridBombs = {}
+
+    local function spawnFirstHitBomb(attack, player, position)
+        local data = attack:GetData()
+        if data.MizukiFirstHitBombSpawned == true then return end
+        local tear = attack:ToTear()
+        if tear and tear:HasTearFlags(TearFlags.TEAR_FETUS) then
+            -- Native enemy contact consumes this flag. A grid bomb must consume
+            -- the SAME opportunity, including on a replay fetus.
+            if not tear:HasTearFlags(TearFlags.TEAR_FETUS_BOMBER) then return end
+            tear:ClearTearFlags(TearFlags.TEAR_FETUS_BOMBER)
+        end
+        data.MizukiFirstHitBombSpawned = true
+        local bomb = player:FireBomb(Vector(position.X, position.Y), Vector.Zero, player)
+        if bomb and Mizuki.rollSpecialBrimstone then Mizuki.rollSpecialBrimstone(bomb, player) end
+    end
+
+    local function segmentDistanceSquared(point, first, last)
+        local dx, dy = last.X - first.X, last.Y - first.Y
+        local lengthSquared = dx * dx + dy * dy
+        local t = lengthSquared > 0 and ((point.X - first.X) * dx
+            + (point.Y - first.Y) * dy) / lengthSquared or 0
+        t = math.max(0, math.min(1, t))
+        local x, y = point.X - first.X - dx * t, point.Y - first.Y - dy * t
+        return x * x + y * y
+    end
+
+    local function overlapsEnemy(laser, enemy)
+        local reach = laser.Size + enemy.Size
+        if laser:IsCircleLaser() then
+            local dx, dy = enemy.Position.X - laser.Position.X, enemy.Position.Y - laser.Position.Y
+            return math.abs(math.sqrt(dx * dx + dy * dy) - laser.Radius) <= reach
+        end
+        -- Native world-space samples retain homing curves and clipped endpoints.
+        local samples = laser:GetSamples()
+        if #samples < 2 then
+            return segmentDistanceSquared(enemy.Position, laser.Position, laser:GetEndPoint()) <= reach * reach
+        end
+        for index = 1, #samples - 1 do
+            if segmentDistanceSquared(enemy.Position, samples:Get(index - 1),
+                samples:Get(index)) <= reach * reach then return true end
+        end
+        return false
+    end
+
+    local function resolveAttack(source, damageFlags)
+        local attack = source and source.Entity
+        if not attack then return end
+        local data = attack:GetData()
+        local player = attack:ToPlayer()
+        if player then
+            -- Native Ludovico ring damage names the player as its source.
+            if (damageFlags & DamageFlag.DAMAGE_LASER) == 0
+                or (damageFlags & DamageFlag.DAMAGE_EXPLOSION) ~= 0 then return end
+            attack = player:GetData().MizukiLudovicoTechXProbe
+            if not attack or not attack:Exists()
+                or attack:GetData().MizukiLudovicoTechXProbe ~= true then return end
+        elseif attack:ToLaser() then
+            attack = attack:ToLaser()
+            player = data.MizukiBeamOwner or data.MizukiLudovicoOwner
+        elseif attack:ToKnife() then
+            attack = attack:ToKnife()
+            if data.MizukiCannonKnife ~= true and data.MizukiEchoKnife ~= true
+                and data.MizukiBerserkSwingHitbox ~= true then return end
+            player = data.MizukiCannonKnifeOwner
+                or ownerOf(attack.Parent) or ownerOf(attack.SpawnerEntity)
+        elseif attack:ToTear() then
+            attack = attack:ToTear()
+            -- Native fetuses already drop their own Dr. Fetus bomb.
+            if attack:HasTearFlags(TearFlags.TEAR_FETUS) then return end
+            player = ownerOf(attack.Parent) or ownerOf(attack.SpawnerEntity)
+        elseif attack:ToFamiliar() then
+            attack = attack:ToFamiliar()
+            if attack.Variant ~= Mizuki.CannonVariant
+                and attack.Variant ~= Mizuki.CannonEchoVariant then return end
+            player = attack.Player
+        elseif attack:ToEffect() and data.MizukiPepperFlame == true then
+            player = ownerOf(attack.SpawnerEntity)
+        else
+            -- Bombs, explosions and their secondary effects cannot spawn more bombs.
+            return
+        end
+        if player and player:Exists() and Mizuki.isMizuki(player) then
+            return attack, player
+        end
+    end
+
+    function Mizuki:TriggerFirstHitFetusBomb(entity, amount, damageFlags, source)
+        local enemy = entity:ToNPC()
+        if amount <= 0 or not enemy or not enemy:IsActiveEnemy(false)
+            or enemy:IsDead() or enemy:HasEntityFlags(EntityFlag.FLAG_FRIENDLY) then return end
+        local attributedOwner = ownerOf(source and source.Entity)
+        if attributedOwner and attributedOwner:Exists() and Mizuki.isMizuki(attributedOwner)
+            and attributedOwner:HasCollectible(CollectibleType.COLLECTIBLE_DR_FETUS)
+            and (damageFlags & DamageFlag.DAMAGE_LASER) ~= 0
+            and (damageFlags & DamageFlag.DAMAGE_EXPLOSION) == 0 then
+            -- FireTechLaser can name its player/familiar as the damage source.
+            -- Do not reduce overlapping multishot to one player-owned proc:
+            -- infer contact separately from each owned laser's native path.
+            for _, entityLaser in ipairs(Isaac.FindByType(EntityType.ENTITY_LASER, -1, -1, false, false)) do
+                local laser = entityLaser:ToLaser()
+                local data = laser:GetData()
+                local owner = data.MizukiBeamOwner or data.MizukiLudovicoOwner
+                if laser:Exists() and owner and GetPtrHash(owner) == GetPtrHash(attributedOwner)
+                    and (data.MizukiBeam == true or data.MizukiLudovicoTechXProbe == true
+                        or data.MizukiTech5 == true)
+                    and laser.CollisionDamage > 0 and overlapsEnemy(laser, enemy) then
+                    spawnFirstHitBomb(laser, attributedOwner, enemy.Position)
+                end
+            end
+            return
+        end
+        local attack, player = resolveAttack(source, damageFlags)
+        if not attack or not player:HasCollectible(CollectibleType.COLLECTIBLE_DR_FETUS) then return end
+        spawnFirstHitBomb(attack, player, enemy.Position)
+    end
+
+    Mizuki:AddCallback(ModCallbacks.MC_ENTITY_TAKE_DMG, Mizuki.TriggerFirstHitFetusBomb)
+
+    function Mizuki:QueueFirstHitFetusGridBomb(attack)
+        if Game():IsPaused() or not attack:Exists() then return end
+        local data = attack:GetData()
+        if data.MizukiFirstHitBombSpawned == true then return end
+        local tear = attack:ToTear()
+        local player
+        if tear and tear:HasTearFlags(TearFlags.TEAR_FETUS) then
+            if data.MizukiFanFetus ~= true
+                or (tear.WaitFrames or 0) > 0
+                or not tear:HasTearFlags(TearFlags.TEAR_FETUS_BOMBER) then return end
+            player = ownerOf(tear.Parent) or ownerOf(tear.SpawnerEntity)
+        else
+            attack, player = resolveAttack({Entity = attack}, 0)
+        end
+        if not attack or not player or not player:Exists() or not Mizuki.isMizuki(player)
+            or not player:HasCollectible(CollectibleType.COLLECTIBLE_DR_FETUS) then return end
+
+        local position
+        local laser, knife, familiar = attack:ToLaser(), attack:ToKnife(), attack:ToFamiliar()
+        if laser then
+            if laser.CollisionDamage <= 0 or (data.MizukiBeam ~= true
+                and data.MizukiLudovicoTechXProbe ~= true and data.MizukiTech5 ~= true) then return end
+            position = laser:IsCircleLaser() and Mizuki.getFetusRingGridTarget(laser)
+                or (not laser:IsCircleLaser() and Mizuki.getFetusBeamGridTarget(laser))
+        elseif knife then
+            if not knife:IsFlying() then return end
+            position = Mizuki.getFetusContactGridTarget(knife.Position, knife.Size)
+        elseif familiar then
+            if data.MizukiAwaitingInitialLayout or data.MizukiIsIdle
+                or player:HasCollectible(CollectibleType.COLLECTIBLE_C_SECTION)
+                or player:HasCollectible(CollectibleType.COLLECTIBLE_MOMS_KNIFE) then return end
+            if data.MizukiEchoCannon == true then
+                local shot = data.MizukiEchoShot
+                if data.MizukiEchoAwaitingShot or not shot or not shot.ReplayFrame
+                    or shot.Removed or shot.FadeFrame or data.MizukiEchoKnifeMode then return end
+            end
+            position = Mizuki.getFetusContactGridTarget(familiar.Position, familiar.Size)
+        else
+            position = Mizuki.getFetusContactGridTarget(attack.Position, attack.Size)
+        end
+        if not position then return end
+        local hash = GetPtrHash(attack)
+        -- Defer until native enemy damage has run, just like Epic Fetus's grid
+        -- candidate. An enemy proc and a grid proc cannot spend two bombs.
+        pendingGridBombs[hash] = {
+            Entity = attack, Seed = attack.InitSeed, Hash = hash,
+            Player = player, PlayerSeed = player.InitSeed, PlayerHash = GetPtrHash(player),
+            Position = Vector(position.X, position.Y), Frame = Game():GetFrameCount(),
+        }
+    end
+
+    function Mizuki:FinalizeFirstHitFetusGridBombs()
+        local candidates = pendingGridBombs
+        pendingGridBombs = {}
+        local frame = Game():GetFrameCount()
+        for _, candidate in pairs(candidates) do
+            local attack, player = candidate.Entity, candidate.Player
+            if candidate.Frame == frame and attack:Exists() and attack.InitSeed == candidate.Seed
+                and GetPtrHash(attack) == candidate.Hash and player:Exists()
+                and player.InitSeed == candidate.PlayerSeed and GetPtrHash(player) == candidate.PlayerHash
+                and Mizuki.isMizuki(player)
+                and player:HasCollectible(CollectibleType.COLLECTIBLE_DR_FETUS) then
+                spawnFirstHitBomb(attack, player, candidate.Position)
+            end
+        end
+    end
+
+    for _, callback in ipairs({ModCallbacks.MC_POST_LASER_UPDATE, ModCallbacks.MC_POST_KNIFE_UPDATE,
+        ModCallbacks.MC_POST_TEAR_UPDATE, ModCallbacks.MC_POST_EFFECT_UPDATE, ModCallbacks.MC_FAMILIAR_UPDATE}) do
+        Mizuki:AddCallback(callback, Mizuki.QueueFirstHitFetusGridBomb)
+    end
+    Mizuki:AddCallback(ModCallbacks.MC_POST_UPDATE, Mizuki.FinalizeFirstHitFetusGridBombs)
+    Mizuki:AddCallback(ModCallbacks.MC_POST_NEW_ROOM, function() pendingGridBombs = {} end)
+end
+
 -- region Kidney Stone
 do
     -- Kidney Stone: detect the native Tears spike, preserve its automatic shooting
