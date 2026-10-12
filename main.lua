@@ -5418,20 +5418,22 @@ Mizuki.LUCKY_FOOT = LUCKY_FOOT
 Mizuki.MOMS_BOX = MOMS_BOX
 Mizuki.SACK_HEAD = SACK_HEAD
 
--- Order matters only in that the capsule file publishes the pocket helpers the
--- fan file aliases.
+-- Capsule helpers and C Section functions load before the fan controller.
+-- Deferred registration below preserves the existing callback order.
 include("scripts/weapon_synergies")
 include("scripts/cannon_appearance")
 include("scripts/peppers")
 include("scripts/epic_fetus")
 include("scripts/experimental_capsule")
+include("scripts/c_section")
 include("scripts/fan")
 include("scripts/berserk_club")
 include("scripts/moms_knife")
 include("scripts/cannon_echo")
 include("scripts/echo_attack_sequence")
-include("scripts/brimstone_special")
-include("scripts/tech5")
-include("scripts/moms_wig")
-include("scripts/hemoptysis")
+Mizuki.registerSpecialBrimstoneCompatibility()
+Mizuki.registerFetalBrimstoneCallbacks()
+Mizuki.registerTech5Callbacks()
+Mizuki.registerMomsWigCallbacks()
+Mizuki.registerHemoptysisCallbacks()
 Mizuki.RegisterPickupLocalization()

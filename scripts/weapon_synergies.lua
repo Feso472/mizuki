@@ -576,3 +576,428 @@ do
     Mizuki:AddCallback(ModCallbacks.MC_POST_RENDER, Mizuki.RenderNeptunusBar)
 end
 -- endregion Neptunus
+
+-- Shared Brimstone curse. Register at the original controller load point.
+function Mizuki.registerSpecialBrimstoneCompatibility()
+    -- Native Repentance only. The attack marker is separate from the enemy status.
+    local MARK = EntityFlag.FLAG_BRIMSTONE_MARKED
+    local MARK_FRAMES = 150
+    local markedEnemies = {}
+
+    function Mizuki.getSpecialBrimstoneChance(luck)
+        -- Holy Light: 10% at zero luck, discrete luck growth, capped at 50%.
+        return 1 / math.max(2, 10 - math.floor(luck * 0.9))
+    end
+
+    function Mizuki.rollSpecialBrimstone(entity, player)
+        local data = entity:GetData()
+        data.MizukiSpecialBrimstoneAttack = true
+        data.MizukiSpecialBrimstoneOwner = player
+        data.MizukiSpecialBrimstoneCurse = player:HasCollectible(CollectibleType.COLLECTIBLE_BRIMSTONE)
+            and player:GetCollectibleRNG(CollectibleType.COLLECTIBLE_BRIMSTONE):RandomFloat()
+                < Mizuki.getSpecialBrimstoneChance(player.Luck)
+    end
+
+    function Mizuki.updateCannonBrimstoneCurse(cannon)
+        local player, data = cannon.Player, cannon:GetData()
+        if data.MizukiPersistentEchoMode then
+            -- Persistent contact echoes copy the original cannon's proc. Automatic
+            -- mode receives its delayed state in the pose history immediately after this.
+            if data.MizukiPersistentEchoMode == "ludovico" then
+                local cannons = player:GetData().MizukiCannons
+                local side = cannons and cannons[data.CannonSide]
+                if side then
+                    for index, candidate in ipairs(side) do
+                        if GetPtrHash(candidate) == GetPtrHash(cannon) then
+                            local original = side[index - #side / 2]
+                            data.MizukiSpecialBrimstoneCurse = original and original:GetData().MizukiSpecialBrimstoneCurse or false
+                            break
+                        end
+                    end
+                end
+            end
+            return
+        end
+        if data.MizukiIsIdle or player:HasCollectible(CollectibleType.COLLECTIBLE_C_SECTION)
+            or player:HasCollectible(CollectibleType.COLLECTIBLE_MOMS_KNIFE)
+            or not player:HasCollectible(CollectibleType.COLLECTIBLE_BRIMSTONE) then
+            data.MizukiSpecialBrimstoneCurse = false
+            data.MizukiSpecialBrimstoneContactNext = nil
+            return
+        end
+        local frame = Game():GetFrameCount()
+        if not data.MizukiSpecialBrimstoneContactNext or frame >= data.MizukiSpecialBrimstoneContactNext then
+            Mizuki.rollSpecialBrimstone(cannon, player)
+            data.MizukiSpecialBrimstoneContactNext = frame + math.max(1, player.MaxFireDelay + 1)
+        end
+    end
+
+    local function markEnemy(enemy)
+        if enemy:HasEntityFlags(EntityFlag.FLAG_NO_STATUS_EFFECTS) then return end
+        local hash = GetPtrHash(enemy)
+        local record = markedEnemies[hash]
+        if record and record.Seed ~= enemy.InitSeed then record = nil end
+        if not record then
+            -- Leave a status already owned by the native game or another mod alone.
+            if enemy:HasEntityFlags(MARK) then return end
+            record = {Entity = enemy, Seed = enemy.InitSeed}
+            markedEnemies[hash] = record
+        end
+        record.Expires = Game():GetFrameCount() + MARK_FRAMES
+        enemy:AddEntityFlags(MARK)
+    end
+
+    Mizuki:AddCallback(ModCallbacks.MC_ENTITY_TAKE_DMG, function(_, entity, amount, _, source)
+        local enemy, attack = entity:ToNPC(), source and source.Entity
+        if not enemy or not attack or amount <= 0 or not enemy:IsActiveEnemy(false)
+            or enemy:HasEntityFlags(EntityFlag.FLAG_FRIENDLY) then return end
+        local data = attack:GetData()
+        if data.MizukiSpecialBrimstoneCurse == true then markEnemy(enemy) end
+    end)
+
+    -- Native Lua exposes the status flag but not AddBrimstoneMark's timer. Maintain
+    -- only our own five-second status; the native engine handles its damage synergy.
+    Mizuki:AddCallback(ModCallbacks.MC_NPC_UPDATE, function(_, enemy)
+        local hash = GetPtrHash(enemy)
+        local record = markedEnemies[hash]
+        if not record then return end
+        if record.Seed ~= enemy.InitSeed or enemy:IsDead() then markedEnemies[hash] = nil; return end
+        if Game():GetFrameCount() >= record.Expires then
+            enemy:ClearEntityFlags(MARK)
+            markedEnemies[hash] = nil
+        else enemy:AddEntityFlags(MARK) end
+    end)
+
+    local function ownerOf(entity, visited)
+        if not entity then return nil end
+        visited = visited or {}
+        local hash = GetPtrHash(entity)
+        if visited[hash] then return nil end
+        visited[hash] = true
+        local player = entity:ToPlayer()
+        if player then return player end
+        local familiar = entity:ToFamiliar()
+        if familiar then return familiar.Player end
+        return ownerOf(entity.SpawnerEntity, visited) or ownerOf(entity.Parent, visited)
+    end
+
+    Mizuki:AddCallback(ModCallbacks.MC_POST_BOMB_UPDATE, function(_, bomb)
+        if bomb:GetData().MizukiSpecialBrimstoneAttack or not bomb.IsFetus then return end
+        local player = ownerOf(bomb)
+        if player and Mizuki.isMizuki(player) then Mizuki.rollSpecialBrimstone(bomb, player) end
+    end)
+
+    function Mizuki.renderSpecialBrimstoneIcon(entity, worldPosition, renderOffset, alpha)
+        local data = entity:GetData()
+        if data.MizukiSpecialBrimstoneCurse ~= true then return end
+        local room = Game():GetRoom()
+        if room:GetRenderMode() == RenderMode.RENDER_WATER_REFLECT then return end
+        local sprite = data.MizukiSpecialBrimstoneIcon
+        if not sprite then
+            sprite = Sprite()
+            sprite:Load("gfx/statuseffects.anm2", true)
+            data.MizukiSpecialBrimstoneIcon = sprite
+        end
+        sprite:SetFrame("BrimstoneCurse", Game():GetFrameCount() % 30)
+        sprite.Color = Color(1, 1, 1, alpha or entity.Color.A, 0, 0, 0)
+        local position = Isaac.WorldToScreen(worldPosition) + (renderOffset or Vector.Zero)
+            - room:GetRenderScrollOffset() - Game().ScreenShakeOffset + Vector(0, -16)
+        sprite:Render(position, Vector.Zero, Vector.Zero)
+    end
+
+    Mizuki:AddCallback(ModCallbacks.MC_POST_TEAR_RENDER, function(_, tear, offset)
+        if tear:GetData().MizukiFanFetus == true then
+            Mizuki.renderSpecialBrimstoneIcon(tear, tear.Position + tear.PositionOffset, offset)
+        end
+    end)
+    Mizuki:AddCallback(ModCallbacks.MC_POST_BOMB_RENDER, function(_, bomb, offset)
+        Mizuki.renderSpecialBrimstoneIcon(bomb, bomb.Position + bomb.PositionOffset, offset)
+    end)
+    Mizuki:AddCallback(ModCallbacks.MC_POST_EFFECT_RENDER, function(_, rocket, offset)
+        if rocket:GetData().MizukiSpecialBrimstoneAttack then
+            Mizuki.renderSpecialBrimstoneIcon(rocket, rocket.Position + rocket.PositionOffset, offset)
+        end
+    end, EffectVariant.ROCKET)
+
+    Mizuki:AddCallback(ModCallbacks.MC_POST_NEW_ROOM, function() markedEnemies = {} end)
+    Mizuki:AddCallback(ModCallbacks.MC_POST_GAME_STARTED, function() markedEnemies = {} end)
+end
+
+-- region Moms Wig
+do
+    -- Real attack notifications are grouped by side, not by projectile count.
+    local PERIOD = Mizuki.BEAM_DAMAGE_INTERVAL * 2
+    local getState
+    local function canRoll(player)
+        return Mizuki.isMizuki(player) and not Game():IsPaused() and not player:IsDead()
+            and player:AreControlsEnabled() and player:IsExtraAnimationFinished()
+            and player:HasCollectible(CollectibleType.COLLECTIBLE_MOMS_WIG)
+    end
+    local function roll(player, channel)
+        if not canRoll(player) then return end
+        local state, frame = getState(player), Game():GetFrameCount()
+        local previous = state.Attempts[channel]
+        if previous and frame >= previous and frame - previous < PERIOD then return end
+        -- Failed rolls consume the same minimum interval. Rewinds discard a future
+        -- attempt rather than locking the player to the abandoned timeline.
+        state.Attempts[channel] = frame
+        local twiceLuck = player.Luck * 2
+        local steps = twiceLuck < 0 and math.ceil(twiceLuck) or math.floor(twiceLuck)
+        local rng = player:GetCollectibleRNG(CollectibleType.COLLECTIBLE_MOMS_WIG)
+        if rng:RandomInt(math.max(1, 20 - steps)) ~= 0 then return end
+        local hive = CollectibleType.COLLECTIBLE_HIVE_MIND
+        local cap = (player:HasCollectible(hive)
+            or player:GetEffects():HasCollectibleEffect(hive)) and 10 or 5
+        if player:GetNumBlueSpiders() >= cap then return end
+        -- Vanilla Wig passes a zero target: native code chooses a free landing
+        -- position and adds scatter. An explicit target bypasses that selection.
+        player:ThrowBlueSpider(player.Position, Vector.Zero)
+    end
+    getState = function(player)
+        local data = player:GetData()
+        if not data.MizukiMomsWigState or not data.MizukiMomsWigState.Attempts then
+            data.MizukiMomsWigState = { Shots = {}, Clocks = {}, Attempts = {} }
+        end
+        return data.MizukiMomsWigState
+    end
+    local function controlledMode(player, data)
+        if player:HasCollectible(CollectibleType.COLLECTIBLE_C_SECTION) then return end
+        local ring = data.MizukiLudovicoTechXProbe
+        if ring and ring:Exists()
+            and player:HasCollectible(CollectibleType.COLLECTIBLE_LUDOVICO_TECHNIQUE) then
+            return "controlled"
+        end
+        if Mizuki.getTargetReticle(player, data) then return "controlled" end
+    end
+    local function originalBeam(data, side, beam)
+        local cannon = data.MizukiCannons and data.MizukiCannons[side]
+            and data.MizukiCannons[side][1]
+        return cannon and cannon:Exists() and beam.Cannon == cannon
+            and not beam.PersistentEchoMode
+            and not cannon:GetData().MizukiGuillotineNonFiring
+    end
+    local function liveBeam(beam)
+        return beam.Laser and beam.Laser:Exists()
+    end
+    -- The controller calls once after the whole volley exists. Only the primary
+    -- pair counts; Box of Friends, extra familiars and echoes do not add procs.
+    function Mizuki.recordMomsWigAttack(player, beams, automatic, periodic, duration, echo)
+        if echo or not canRoll(player) then return end
+        local data = player:GetData()
+        if controlledMode(player, data) or data.MizukiCannonAutoFireState == "deployed"
+            or automatic then return end
+        local sides = {}
+        for _, beam in ipairs(beams) do
+            local side = beam.LeftEye and 1 or 2
+            if originalBeam(data, side, beam) and liveBeam(beam) then
+                sides[side] = sides[side] or {}
+                sides[side][#sides[side] + 1] = beam
+            end
+        end
+        for side = 1, 2 do
+            if sides[side] then
+                if periodic then
+                    local state = getState(player)
+                    state.Shots[#state.Shots + 1] = {
+                        Beams = sides[side], Side = side, Elapsed = 0, Duration = duration,
+                        BornFrame = Game():GetFrameCount(),
+                    }
+                else roll(player, side) end
+            end
+        end
+    end
+    -- Real gbt volleys report here. Echo replay calls fireFanFetus directly;
+    -- simultaneous familiar copies share one player opportunity.
+    function Mizuki.recordMomsWigFanVolley(player)
+        if not canRoll(player) then return end
+        roll(player, "fan")
+    end
+    local function advanceClock(player, state, side, mode, interval)
+        local clock = state.Clocks[side]
+        if not clock or clock.Mode ~= mode then
+            clock = { Mode = mode, Elapsed = 0, Interval = interval }
+            state.Clocks[side] = clock
+        elseif clock.Interval ~= interval then
+            clock.Elapsed = clock.Elapsed * interval / clock.Interval
+        end
+        clock.Interval = interval
+        clock.Elapsed = clock.Elapsed + 1
+        if clock.Elapsed >= interval then
+            clock.Elapsed = clock.Elapsed - interval
+            roll(player, side)
+        end
+    end
+    function Mizuki:UpdateMomsWig(player)
+        if not Mizuki.isMizuki(player) then return end
+        local data = player:GetData()
+        if player:IsDead() or not player:HasCollectible(CollectibleType.COLLECTIBLE_MOMS_WIG) then
+            data.MizukiMomsWigState = nil
+            return
+        end
+        if not canRoll(player) then return end
+        local state, frame = getState(player), Game():GetFrameCount()
+        if state.LastFrame == frame then return end
+        state.LastFrame = frame
+        if player:HasCollectible(CollectibleType.COLLECTIBLE_C_SECTION) then
+            state.Shots, state.Clocks = {}, {}
+            return
+        end
+        local deployed = data.MizukiCannonAutoFireState == "deployed"
+        local mode = controlledMode(player, data) or deployed and "deployed"
+        if mode then state.Shots = {} end
+        for index = #state.Shots, 1, -1 do
+            local shot, live = state.Shots[index], false
+            for _, beam in ipairs(shot.Beams) do
+                if liveBeam(beam) then live = true; break end
+            end
+            if not live then table.remove(state.Shots, index)
+            elseif shot.BornFrame ~= frame then
+                shot.Elapsed = shot.Elapsed + 1
+                -- Preserve the finite window, including the native shrink tail.
+                -- Another effect holding a laser cannot extend this quota.
+                if shot.Elapsed <= shot.Duration and shot.Elapsed % PERIOD == 0 then roll(player, shot.Side) end
+                if shot.Elapsed >= shot.Duration then table.remove(state.Shots, index) end
+            end
+        end
+        for side = 1, 2 do
+            local source
+            for _, beam in ipairs(data.MizukiActiveBeams and data.MizukiActiveBeams[side] or {}) do
+                if originalBeam(data, side, beam) and liveBeam(beam) and not beam.Ending then
+                    source = source or beam
+                    if beam.Automatic then source = beam; break end
+                end
+            end
+            local cannon = data.MizukiCannons and data.MizukiCannons[side]
+                and data.MizukiCannons[side][1]
+            local interval, clockMode
+            if mode and cannon and cannon:Exists() then
+                clockMode = mode
+                interval = (Mizuki.usesAutomaticBeam(player) or Mizuki.hasPeriodicBeam(player))
+                    and PERIOD or math.max(PERIOD, player.MaxFireDelay + 1)
+            elseif source and source.Automatic then
+                clockMode, interval = "continuous", PERIOD
+            end
+            if interval then advanceClock(player, state, side, clockMode, interval)
+            else state.Clocks[side] = nil end
+        end
+    end
+    local function reset()
+        for index = 0, Game():GetNumPlayers() - 1 do
+            local data = Isaac.GetPlayer(index):GetData()
+            data.MizukiMomsWigState = nil
+        end
+    end
+    function Mizuki.registerMomsWigCallbacks()
+        Mizuki:AddCallback(ModCallbacks.MC_POST_PEFFECT_UPDATE, Mizuki.UpdateMomsWig)
+        Mizuki:AddCallback(ModCallbacks.MC_POST_NEW_ROOM, reset)
+        Mizuki:AddCallback(ModCallbacks.MC_POST_GAME_STARTED, reset)
+    end
+end
+-- endregion Moms Wig
+
+-- region Hemoptysis
+do
+    -- Native sneeze visuals are BLOOD_EXPLOSION (subtype 2/3) and HAEMO_TRAIL
+    -- (subtype 1), not EntityLaser. Their first native update occurs inside the
+    -- firing function, before ID_HEMOPTYSIS is added to the player.
+    local function restoreSneezeMouth(_, effect)
+        if effect:GetData().MizukiHemoptysisMouthOffsetApplied then return end
+        if effect.Variant == EffectVariant.BLOOD_EXPLOSION then
+            if effect.SubType ~= 2 and effect.SubType ~= 3 then return end
+        elseif effect.Variant == EffectVariant.HAEMO_TRAIL then
+            if effect.SubType ~= 1 then return end
+        else
+            return
+        end
+        local player = effect.SpawnerEntity and effect.SpawnerEntity:ToPlayer()
+        if not player or not Mizuki.isMizuki(player)
+            or not player:HasCollectible(CollectibleType.COLLECTIBLE_C_SECTION)
+            or not player:HasCollectible(CollectibleType.COLLECTIBLE_HEMOPTYSIS) then return end
+        -- Only replace the native C Section belly offset. Fetal launch effects
+        -- come from a familiar and ordinary blood effects do not use this offset.
+        local offset = effect.PositionOffset
+        if math.abs(offset.X) > Mizuki.RuntimeParameters.OffsetEpsilon
+            or math.abs(offset.Y + 6 * player.SpriteScale.Y)
+                > Mizuki.RuntimeParameters.OffsetEpsilon then return end
+        -- Native offset 3 resolves Mouth without the C Section override. Offset
+        -- 4 resolves the same Mouth but substitutes the belly when C Section is held.
+        effect.PositionOffset = player:GetLaserOffset(
+            LaserOffset.LASER_SHOOP_OFFSET, Vector.Zero
+        )
+        effect:GetData().MizukiHemoptysisMouthOffsetApplied = true
+    end
+
+    function Mizuki.registerHemoptysisCallbacks()
+        Mizuki:AddCallback(ModCallbacks.MC_POST_EFFECT_UPDATE, restoreSneezeMouth,
+            EffectVariant.BLOOD_EXPLOSION)
+        Mizuki:AddCallback(ModCallbacks.MC_POST_EFFECT_UPDATE, restoreSneezeMouth,
+            EffectVariant.HAEMO_TRAIL)
+    end
+end
+-- endregion Hemoptysis
+
+-- region Tech 5
+do
+    -- Held shooting remains independent of the primary weapon's releases.
+    -- Native timing: one 1/3 roll per eight logic frames, including failed rolls.
+    -- Tech .5 is the player's forehead weapon and never enters cannon/fan echoes.
+    function Mizuki:UpdateTech5(player)
+        if not Mizuki.isMizuki(player) or Game():IsPaused() or player:IsDead()
+            or not player:AreControlsEnabled() or not player:IsExtraAnimationFinished()
+            or not player:HasCollectible(CollectibleType.COLLECTIBLE_TECH_5) then return end
+        local data, frame = player:GetData(), Game():GetFrameCount()
+        local parameters = Mizuki.WeaponParameters.Tech5
+        if data.MizukiTech5NextRollFrame and frame < data.MizukiTech5NextRollFrame then return end
+        local shooting, direction, target = Mizuki.getTech5Input(player)
+        if not shooting then return end
+        data.MizukiTech5NextRollFrame = frame + parameters.RollIntervalFrames
+        if player:GetCollectibleRNG(CollectibleType.COLLECTIBLE_TECH_5):RandomInt(parameters.RollRandomBound) ~= 0 then return end
+        -- Offset 2 owns the native forehead origin and Repentance+ 5% random-effect
+        -- branch. Do not reroll, replace flags/colors, or turn this into a cannon beam.
+        local head = Mizuki.getGuillotineHeads(player)[1]
+        -- FireTechLaser itself adds TearsOffset, including native Guillotine
+        -- displacement. Cancel it in the requested origin instead of adding twice.
+        local origin = head and (head.Position - player.TearsOffset) or player.Position
+        local laser = player:FireTechLaser(origin, LaserOffset.LASER_TECH5_OFFSET,
+            direction, false, true, player, 1)
+        -- Native samples enter their fade around age 2 and disappear at age 4-5.
+        -- Set only the active timeout; the engine owns the fade and removal.
+        laser.Timeout = parameters.ActiveFrames
+        -- Raise Tech .5's native forehead beam by two screen pixels.
+        laser.PositionOffset = laser.PositionOffset + Vector(0, -2)
+        if target then
+            -- Point from the actual native forehead origin, not the ground center.
+            local offset = target - laser.Position
+            if offset:Length() > Mizuki.RuntimeParameters.AimDeadZone then
+                laser.AngleDegrees = offset:GetAngleDegrees()
+            end
+        end
+        local laserData = laser:GetData()
+        laserData.MizukiTech5, laserData.MizukiBeamOwner = true, player
+        if head then
+            -- The player remains the native attack source. Only the moving origin
+            -- follows the head; disable the engine's body-parent repositioning.
+            laser.DisableFollowParent = true
+            laserData.MizukiTech5OriginHead = head
+            laserData.MizukiTech5OriginHeadSeed = head.InitSeed
+            laserData.MizukiTech5HeadOffset = laser.Position - head.Position
+            laser.Velocity = Vector(head.Velocity.X, head.Velocity.Y)
+        end
+    end
+
+    function Mizuki:UpdateTech5HeadOrigin(laser)
+        local data = laser:GetData()
+        if not data.MizukiTech5 then return end
+        local head = data.MizukiTech5OriginHead
+        if not head or not head:Exists() or head.InitSeed ~= data.MizukiTech5OriginHeadSeed then return end
+        laser.Position = head.Position + data.MizukiTech5HeadOffset
+        laser.Velocity = Vector(head.Velocity.X, head.Velocity.Y)
+    end
+
+    function Mizuki.registerTech5Callbacks()
+        -- Registered after UpdateWeapon; this remains independent of all early exits.
+        Mizuki:AddCallback(ModCallbacks.MC_POST_PEFFECT_UPDATE, Mizuki.UpdateTech5)
+        Mizuki:AddCallback(ModCallbacks.MC_POST_LASER_UPDATE, Mizuki.UpdateTech5HeadOrigin)
+    end
+end
+-- endregion Tech 5

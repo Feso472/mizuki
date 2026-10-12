@@ -1,36 +1,20 @@
 # Mizuki / 弥月
 
-A playable character mod for vanilla Repentance / Repentance+, using native Lua APIs without REPENTOGON.
-
-## Character
-
-- A separate playable character named `弥月Mizuki`.
-- Paired floating cannons provide Mizuki's ordinary attacks, with weapon replacements and item synergies.
-- Xiaobotu handles gifts and becomes Geibotu while Mizuki holds C Section, firing Mizuki's custom fetuses.
-- Birthright with PHD or False PHD enables delayed attack echoes.
-
-## Code layout
-
-`main.lua` owns the weapon controller and connects these feature modules:
-
-- `scripts/cannon_echo.lua`, `scripts/echo_attack_sequence.lua`: delayed attack replay, including recorded changes to attack flags, damage and color.
-- `scripts/birthright.lua`: pickup detection, doctorate offers, Boss challenge and rewards.
-- `scripts/cannons.lua`: deployment controls and contact damage.
-- `scripts/weapon_synergies.lua`: shared item interactions, including Dr. Fetus bombs on the first enemy or obstacle contact.
-- `scripts/cannon_appearance.lua`: floating-cannon appearance selection for permanent and randomly triggered tear graphics.
-- `scripts/tech5.lua`, `scripts/moms_wig.lua`, `scripts/peppers.lua`, `scripts/hemoptysis.lua`: auxiliary item attacks and their trigger rules.
-- `scripts/brimstone_special.lua`: Brimstone curses on special attacks and damaging fireballs attached to fetuses.
-- `scripts/localization.lua`: pickup banners and EID integration.
-- `scripts/experimental_capsule.lua`, `scripts/fan.lua`, `scripts/moms_knife.lua`, `scripts/epic_fetus.lua`: independent gameplay features.
-- `scripts/berserk_club.lua`: Berserk bone-club swings, charged throws, reflection and kill-time extension.
-
-### C Section compatibility
-
-- Geibotu replaces the floating cannons and fires fetuses directly.
-- Mizuki-only fetus graphics and Geibotu idle, shot and gift animations.
-- Geibotu blocks projectiles at 75%; fetuses block at 10%.
-- Delayed echoes replay fetus attacks and changing attack effects.
-- Supports multishot and native fetus weapon combinations.
-- Brimstone adds a damaging fireball and a chance to apply its curse.
-- Epic Fetus strikes share the player's cooldown.
-- Removes C Section's character costume from Mizuki.
+- `main.lua`：角色初始化、属性与攻击控制、模块加载。
+- `scripts/cannons.lua`：浮游炮部署、跟随和接触伤害。
+- `scripts/cannon_appearance.lua`：浮游炮外观选择与绘制。
+- `scripts/cannon_echo.lua`：残影生成、跟随和延迟发射。
+- `scripts/echo_attack_sequence.lua`：攻击属性变化的记录与回放。
+- `scripts/fan.lua`：小博兔跟随、给予、消弹与共用动画。
+- `scripts/c_section.lua`：剖腹产发射、胎儿贴图、消弹和硫磺火团。
+- `scripts/moms_knife.lua`：妈刀攻击、运动和绘制。
+- `scripts/berserk_club.lua`：狂暴骨棒挥动、蓄力投掷和近战交互。
+- `scripts/epic_fetus.lua`：史诗胎儿目标、导弹和冷却。
+- `scripts/peppers.lua`：辣椒攻击及残影回放。
+- `scripts/weapon_synergies.lua`：共用道具兼容，包括胎儿博士、硫磺火诅咒、科技 .5、假发和咳血。
+- `scripts/birthright.lua`：长子权、博士选择与挑战奖励。
+- `scripts/experimental_capsule.lua`：实验胶囊生成、使用与状态管理。
+- `scripts/localization.lua`：拾取提示与 EID 集成。
+- `translations/`：中英文文本与语言加载。
+- `content/`：角色、道具和实体定义。
+- `resources/`：贴图与动画资源。
