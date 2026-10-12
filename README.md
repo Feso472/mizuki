@@ -1,28 +1,28 @@
-# Mizuki / 弥月
+# Mizuki
 
-《以撒的结合：忏悔 / 忏悔+》角色模组，使用原生 Lua API，无需 REPENTOGON。
+A character mod for The Binding of Isaac: Repentance / Repentance+. Uses native Lua APIs; REPENTOGON is not required.
 
-弥月使用一对浮游炮攻击，随行的小博兔会给予补给。
+Mizuki fights with a pair of floating cannons, accompanied by Xiaobotu, a familiar that offers supplies.
 
-## 从哪里看起
+## Code layout
 
-先看 `main.lua` 的攻击控制，再按需要进入下面的功能模块。
+Start with `main.lua` for the attack controller, then explore the relevant feature module.
 
-- `main.lua`：角色初始化、属性与攻击控制、模块加载。
-- `scripts/cannons.lua`：浮游炮部署、跟随和接触伤害。
-- `scripts/cannon_appearance.lua`：浮游炮外观选择与绘制。
-- `scripts/cannon_echo.lua`：残影生成、跟随和延迟发射。
-- `scripts/echo_attack_sequence.lua`：攻击属性变化的记录与回放。
-- `scripts/fan.lua`：小博兔跟随、给予、消弹与共用动画。
-- `scripts/c_section.lua`：剖腹产发射、胎儿贴图、消弹和硫磺火团。
-- `scripts/moms_knife.lua`：妈刀攻击、运动和绘制。
-- `scripts/berserk_club.lua`：狂暴骨棒挥动、蓄力投掷和近战交互。
-- `scripts/epic_fetus.lua`：史诗胎儿目标、导弹和冷却。
-- `scripts/peppers.lua`：辣椒攻击及残影回放。
-- `scripts/weapon_synergies.lua`：共用道具兼容，包括胎儿博士、硫磺火诅咒、科技 .5、假发和咳血。
-- `scripts/birthright.lua`：长子权、博士选择与挑战奖励。
-- `scripts/experimental_capsule.lua`：实验胶囊生成、使用与状态管理。
-- `scripts/localization.lua`：拾取提示与 EID 集成。
-- `translations/`：中英文文本与语言加载。
-- `content/`：角色、道具和实体定义。
-- `resources/`：贴图与动画资源。
+- `main.lua`: character setup, stats, attack control and module loading.
+- `scripts/cannons.lua`: cannon deployment, following and contact damage.
+- `scripts/cannon_appearance.lua`: cannon appearance selection and rendering.
+- `scripts/cannon_echo.lua`: echo creation, following and delayed attacks.
+- `scripts/echo_attack_sequence.lua`: recording and replaying attack property changes.
+- `scripts/fan.lua`: Xiaobotu's following, gifts, projectile blocking and shared animations.
+- `scripts/c_section.lua`: C Section firing, fetus graphics, blocking and Brimstone fireballs.
+- `scripts/moms_knife.lua`: knife attacks, movement and rendering.
+- `scripts/berserk_club.lua`: Berserk swings, charged throws and melee interactions.
+- `scripts/epic_fetus.lua`: Epic Fetus targeting, rockets and cooldowns.
+- `scripts/peppers.lua`: pepper attacks and echo replay.
+- `scripts/weapon_synergies.lua`: shared item compatibility, including Dr. Fetus, Brimstone curses, Tech .5, Mom's Wig and Hemoptysis.
+- `scripts/birthright.lua`: Birthright, doctorate choices and challenge rewards.
+- `scripts/experimental_capsule.lua`: Experimental Capsule creation, use and state management.
+- `scripts/localization.lua`: pickup banners and EID integration.
+- `translations/`: English and Chinese text and language loading.
+- `content/`: character, item and entity definitions.
+- `resources/`: graphics and animations.
