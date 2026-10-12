@@ -2,7 +2,12 @@
 
 A character mod for The Binding of Isaac: Repentance / Repentance+. Uses native Lua APIs; REPENTOGON is not required.
 
-Mizuki fights with a pair of floating cannons, accompanied by Xiaobotu, a familiar that offers supplies.
+## Character features
+
+- A pair of floating cannons replaces ordinary tear attacks.
+- Xiaobotu follows Mizuki and offers supplies.
+- Experimental Capsules provide stat changes.
+- Birthright unlocks delayed attack echoes through the doctorate system.
 
 ## Code layout
 
