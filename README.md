@@ -1,57 +1,52 @@
 # Mizuki / 弥月
 
-Early vanilla Repentance+ character prototype. 
+A playable character mod for vanilla Repentance / Repentance+, using native Lua APIs without REPENTOGON.
 
-## Current prototype
+## Character
 
 - A separate playable character named `弥月Mizuki`.
+- Paired floating cannons provide Mizuki's ordinary attacks, with weapon replacements and item synergies.
+- Xiaobotu handles gifts and becomes Geibotu while Mizuki holds C Section, firing Mizuki's custom fetuses.
+- Birthright with PHD or False PHD enables delayed attack echoes.
 
 ## Code layout
 
 `main.lua` owns the weapon controller and connects these feature modules:
 
-- `scripts/cannon_echo.lua`: all cannon echoes; damage and follow-delay settings are at the top.
+- `scripts/cannon_echo.lua`, `scripts/echo_attack_sequence.lua`: delayed attack replay, including recorded changes to attack flags, damage and color.
 - `scripts/birthright.lua`: pickup detection, doctorate offers, Boss challenge and rewards.
 - `scripts/cannons.lua`: deployment controls and contact damage.
-- `scripts/weapon_synergies.lua`: Kidney Stone, Isaac's Tears and Neptunus compatibility.
+- `scripts/weapon_synergies.lua`: shared item interactions, including Dr. Fetus bombs on the first enemy or obstacle contact.
+- `scripts/cannon_appearance.lua`: floating-cannon appearance selection for permanent and randomly triggered tear graphics.
+- `scripts/tech5.lua`, `scripts/moms_wig.lua`, `scripts/peppers.lua`, `scripts/hemoptysis.lua`: auxiliary item attacks and their trigger rules.
+- `scripts/brimstone_special.lua`: Brimstone curses on special attacks and damaging fireballs attached to fetuses.
 - `scripts/localization.lua`: pickup banners and EID integration.
 - `scripts/experimental_capsule.lua`, `scripts/fan.lua`, `scripts/moms_knife.lua`, `scripts/epic_fetus.lua`: independent gameplay features.
 - `scripts/berserk_club.lua`: Berserk bone-club replacement, tap swings, held throw charge, reflection and melee pickup interactions. Throws reuse the knife-driven beam and its native collision offset; both club and beam carry the native Berserk kill-reward flag.
 
-### C Section prototype
+### C Section compatibility
 
-While Mizuki holds C Section, each real Xiaobotu familiar fires immediately
-and then at `max(1, MaxFireDelay + 1)` logical-frame intervals while shooting.
-This is a direct-fire character synergy with no charge bar. Firing plays
-`SOUND_PLOP` (once per player per frame, including delayed echo shots).
-The fetus starts at Xiaobotu's
-position, uses the player's ShotSpeed and native tear damage/effects, and retains
-Mizuki's custom fetus graphics (without an extra color tint). While holding
-C Section, Xiaobotu uses `gbt.png`: cells 1/2 are forward/right idle/shot,
-mirrored for left; cells 3/4 are back idle/shot, and cells 5-8 give gifts.
-Idle floating never alternates into the shot artwork. An actual fetus launch
-shows the shot artwork for five logical frames before returning to idle;
-gifts take animation priority and echoes replay the recorded shot posture.
-The gift's Drop event stays at logical frame 6. Losing C Section restores
-Xiaobotu without restarting a gift in progress. Copied familiars fire independently.
-Geibotu blocks enemy projectiles with a 75% chance and has an extra 1.5x
-blocking radius, stacking with BFFS for 2.25x. C Section does not add visual
-scaling. Each fetus (including echo shots) gets a 10% block roll per hostile
-projectile, once per pair; failed rolls do not reroll on subsequent overlap
-frames. Native Lost Contact shielding takes priority. EID shows the C Section
-combination on both items and updates the familiar's displayed block chance.
-With the existing Birthright + PHD/False PHD echo condition, each fan has a
-separate Xiaobotu afterimage which follows the shared echo delay and replays
-its fetus shots at the shared echo damage multiplier. The afterimage cannot
-block projectiles or produce gifts. Brimstone, Technology, Tech X,
-Mom's Knife, Spirit Sword and Dr. Fetus add their native fetus flags.
-
-Only C Section's collectible costume is removed from Mizuki. Other costumes
-and the item itself remain active. C Section takes priority over ordinary cannon
-attacks, cannon contact damage, cannon knives and the custom Ludovico ring;
-losing the item restores the usual weapon controller. Paused or disabled controls
-suspend familiar firing. Native homing, lifespan and combined synergy priorities
-still need in-game validation on the target Repentance build.
+- **Attack replacement:** C Section disables ordinary cannon attacks, contact damage, cannon knives and the custom Ludovico ring. Losing it restores the usual weapon controller.
+- **Firing origin:** Each real Xiaobotu fires fetuses from its own position; copied familiars fire independently.
+- **Fire rate:** Direct fire without charging. The first shot is immediate; subsequent volleys use `max(1, MaxFireDelay + 1)` logical-frame intervals.
+- **Attack properties:** Fetuses use the player's ShotSpeed and native tear damage/effects, including supported multishot combinations.
+- **Fetus graphics:** Mizuki's custom fetus graphics apply only to her fetuses, without extra pink tinting.
+- **Character costume:** Only C Section's collectible costume is removed from Mizuki.
+- **Geibotu graphics:** C Section switches Xiaobotu to `gbt.png`; losing it restores Xiaobotu without interrupting an ongoing gift animation.
+- **Animation cells:** Cells 1/2 are forward/right idle/shot, mirrored for left; cells 3/4 are back idle/shot; cells 5-8 give gifts.
+- **Shot animation:** A launch shows the shot artwork for five logical frames, then returns to idle. Idle bobbing does not alternate into shot artwork.
+- **Gift animation:** Gifts take priority over shots; the Drop event remains at logical frame 6.
+- **Sound:** Launches play `SOUND_PLOP`, at most once per player per frame, including delayed echo shots.
+- **Geibotu blocking:** 75% chance with an extra 1.5x blocking radius; BFFS stacks this to 2.25x. C Section itself does not enlarge the displayed familiar.
+- **Fetus blocking:** Each fetus, including echo fetuses, has a 10% block chance per hostile projectile. Failed rolls do not repeat during continued overlap; native Lost Contact shielding takes priority.
+- **Echo familiar:** Birthright with PHD or False PHD creates a delayed afterimage for each fan. The afterimage cannot block projectiles or give gifts.
+- **Echo attacks:** Replay the recorded volley, shot posture and subsequent flag, damage and color changes, with the shared echo damage multiplier and echo transparency.
+- **Native fetus weapons:** Technology, Tech X, Mom's Knife, Spirit Sword and Dr. Fetus use native fetus flags; Berserk supplies the bone-club flag.
+- **Brimstone fireball:** A native damaging fireball follows beneath each fetus, at 0.5 times its scale and 50% of its damage.
+- **Brimstone curse:** Fetuses can roll the custom curse using the player's luck.
+- **Epic Fetus:** Fetus-triggered strikes share the player's cooldown.
+- **Controls:** Pausing, death or disabled controls suspend familiar firing.
+- **EID:** Both items show the combination; the familiar's description updates its block chance.
 
 Language text stays in `translations/en.lua` and `translations/zh.lua`.
 Related rules belong in their feature file; a new mode or short helper does not need a new module.
