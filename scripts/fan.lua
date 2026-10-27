@@ -1,8 +1,6 @@
 -- The fan familiar: its needs, rewards and floor gifts.
 --
--- Extracted from main.lua. main publishes the helpers this file needs on the
--- Mizuki table; the functions below are published there in turn for the code
--- that stayed behind.
+-- Capsule transactions and fetal helpers load before this familiar controller.
 
 local BFFS = Mizuki.BFFS
 local LUCKY_FOOT = Mizuki.LUCKY_FOOT
@@ -13,7 +11,7 @@ local getConsumableSlotCount = Mizuki.getConsumableSlotCount
 local pocketConsumableSlotIsEmpty = Mizuki.pocketConsumableSlotIsEmpty
 
 -- Mizuki Fan ---------------------------------------------------------------
--- Values which the design document leaves open are centralized for testing.
+-- Familiar tuning is kept together here.
 local FAN_BLOCK_CHANCE = 0.50
 local FAN_C_SECTION_BLOCK_CHANCE = 0.75
 local FAN_NEED_WINDOW = 0.10
@@ -431,9 +429,7 @@ function Mizuki:UpdateFanFamiliar(familiar)
         data.MizukiFanCurrentGift = nil
     end
     if sprite:IsFinished("Gift") then sprite:Play(animation, true) end
-    if Mizuki.recordFanEchoSample then
-        Mizuki.recordFanEchoSample(familiar, fetuses, auxiliary)
-    end
+    Mizuki.recordFanEchoSample(familiar, fetuses, auxiliary)
     -- Notify only when the real gbt switches to a float pose. Returning from
     -- Gift also resets the float phase; entering Gift does not share its track.
     local currentAnimation = sprite:GetAnimation()

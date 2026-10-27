@@ -56,7 +56,9 @@ local function readState(entity)
         Damage = entity.CollisionDamage,
         BrimstoneCurse = data.MizukiSpecialBrimstoneCurse,
         FetalBrimstone = data.MizukiFetalBrimstoneEnabled,
+        FetalBrimstoneDamageMultiplier = data.MizukiFetalBrimstoneDamageMultiplier,
         CannonAppearance = cannonAppearance,
+        DeadEyeIntensity = data.MizukiDeadEyeIntensity,
     }
 end
 local function restoreReplayColor(binding)
@@ -97,7 +99,9 @@ local function capture(record)
     elseif not useChangeFrames or not old or state.FlagsKey ~= old.FlagsKey
         or state.Damage ~= old.Damage or state.Color ~= old.Color
         or state.BrimstoneCurse ~= old.BrimstoneCurse or state.FetalBrimstone ~= old.FetalBrimstone
-        or state.CannonAppearance ~= old.CannonAppearance then
+        or state.FetalBrimstoneDamageMultiplier ~= old.FetalBrimstoneDamageMultiplier
+        or state.CannonAppearance ~= old.CannonAppearance
+        or state.DeadEyeIntensity ~= old.DeadEyeIntensity then
         sequence.Ages[#sequence.Ages + 1] = age
         sequence.Samples[age] = state
     end
@@ -142,7 +146,7 @@ function Mizuki.applyEchoAttackSequence(entity)
     local sequence = binding.Sequence
     local age = Game():GetFrameCount() - (binding.WorldClock and sequence.Origin or binding.Origin)
         - binding.Delay
-    local state, savedAge = stateAt(sequence, age)
+    local state = stateAt(sequence, age)
     if not state then state = binding.LastState end
     if not state then return false end
     binding.LastState = state
@@ -170,17 +174,21 @@ function Mizuki.applyEchoAttackSequence(entity)
         local hidden = copyColor(color)
         hidden.A = 0 -- Preserve the existing manual-render collision body.
         entity.Color = hidden
-    else entity.Color = color end
+    else
+        entity.Color = color
+        if data.MizukiEchoKnife == true then Mizuki.keepSplitKnifeSourceHidden(entity) end
+    end
     data.MizukiSpecialBrimstoneCurse = state.BrimstoneCurse
     data.MizukiFetalBrimstoneEnabled = state.FetalBrimstone
+    data.MizukiFetalBrimstoneDamageMultiplier = state.FetalBrimstoneDamageMultiplier
     data.MizukiCannonAttackAppearanceKey = state.CannonAppearance
+    data.MizukiDeadEyeIntensity = state.DeadEyeIntensity
     -- Knife native hit scaling already runs in scaleKnifeHit; never halve it twice.
-    if not entity:ToKnife() then entity.CollisionDamage = state.Damage * binding.DamageMultiplier end
-    data.MizukiAttackSequenceReplayAge = age
-    data.MizukiAttackSequenceSampleAge = savedAge
-    data.MizukiAttackSequenceRecordedFlags = state.Flags
-    data.MizukiAttackSequenceExpectedFlags = replayFlags
-    data.MizukiAttackSequenceExpectedColor = copyColor(entity.Color)
+    if data.MizukiBerserkCollisionProxy == true then
+        -- This carrier uses our damage dispatcher, not native knife damage.
+        -- Keep the unscaled snapshot; the dispatcher applies the echo multiplier.
+        entity.CollisionDamage = state.Damage
+    elseif not entity:ToKnife() then entity.CollisionDamage = state.Damage * binding.DamageMultiplier end
     return true
 end
 

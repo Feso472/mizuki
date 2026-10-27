@@ -170,7 +170,13 @@ function Mizuki.replayFanPepper(player, result, origin)
     spawnFlame(player, result, origin, nil, "finite")
 end
 
+-- Melee is a real attack even when no ranged beam is released.
+function Mizuki.recordMeleePepperAttack(player, direction)
+    if hasPeppers(player) then opportunity(player, direction, false) end
+end
+
 local function liveBeam(beam)
+    if beam and beam.TrisagionShot then return beam.Tear and beam.Tear:Exists() end
     return beam and beam.Laser and beam.Laser:Exists()
 end
 
@@ -187,9 +193,16 @@ function Mizuki.recordPepperAttack(player, direction, beams, automatic, periodic
     local data = player:GetData()
     -- These modes own a single delay clock, not an extra firing-event proc.
     if data.MizukiCannonAutoFireState == "deployed"
-        or player:HasCollectible(CollectibleType.COLLECTIBLE_LUDOVICO_TECHNIQUE) then return end
+        or Mizuki.usesLudovicoWeapon(player) then return end
     local state = getState(data)
-    if automatic then
+    local tethered = beams[1] and beams[1].TechXDriven and beams[1].TechXLinked
+    if tethered then
+        attack.TechXTethered, attack.Periodic = true, true
+        state.Shots[#state.Shots + 1] = {
+            Beams = beams, Direction = Vector(direction.X, direction.Y),
+            Elapsed = 0, Duration = duration, BornFrame = Game():GetFrameCount(), Attack = attack,
+        }
+    elseif automatic then
         if not state.Continuous.original then
             state.Continuous.original = { Frame = Game():GetFrameCount(), Elapsed = 0 }
         end
@@ -241,6 +254,7 @@ local function updateFiniteReplay(player, replay)
         spawnFlame(player, event.Result, ghost.Position, replay.Knife, "finite")
         replay.NextEvent = replay.NextEvent + 1
     end
+    if replay.Attack.TechXTethered then return live end
     return (replay.Attack.Periodic or replay.Attack.Deployed) and replay.Elapsed < 600
 end
 
@@ -341,7 +355,7 @@ end
 function Mizuki:UpdatePepperAttacks(player)
     if not Mizuki.isMizuki(player) then return end
     local data = player:GetData()
-    if player:HasCollectible(CollectibleType.COLLECTIBLE_C_SECTION) then
+    if Mizuki.usesCSectionWeapon(player) then
         data.MizukiPepperState = nil
         return
     end
@@ -368,8 +382,8 @@ function Mizuki:UpdatePepperAttacks(player)
         if replay.BornFrame ~= frame then replay.Elapsed = replay.Elapsed + 1 end
         if not updateFiniteReplay(player, replay) then table.remove(state.EchoShots, index) end
     end
-    local ring = data.MizukiLudovicoTechXProbe
-    local mode = player:HasCollectible(CollectibleType.COLLECTIBLE_LUDOVICO_TECHNIQUE)
+    local ring = data.MizukiLudovicoRing
+    local mode = Mizuki.usesLudovicoWeapon(player)
         and ring and ring:Exists() and "ludovico"
         or data.MizukiCannonAutoFireState == "deployed" and "deployed"
     if mode then
@@ -402,7 +416,9 @@ function Mizuki:UpdatePepperAttacks(player)
         local shot = state.Shots[index]
         local live = false
         for _, beam in ipairs(shot.Beams) do
-            if liveBeam(beam) then live = true; break end
+            if liveBeam(beam) and (not shot.Attack.TechXTethered or not beam.Ending) then
+                live = true; break
+            end
         end
         if not live then
             table.remove(state.Shots, index)
@@ -410,10 +426,10 @@ function Mizuki:UpdatePepperAttacks(player)
             shot.Elapsed = shot.Elapsed + 1
             -- The native shrink tail is still part of the finite attack.
             -- At 19/17 total frames, opportunities occur at 4, 8, 12, 16 only.
-            if shot.Elapsed <= shot.Duration and shot.Elapsed % PERIOD == 0 then
+            if (shot.Attack.TechXTethered or shot.Elapsed <= shot.Duration) and shot.Elapsed % PERIOD == 0 then
                 opportunity(player, shot.Direction, false, shot.Attack, shot.Elapsed)
             end
-            if shot.Elapsed >= shot.Duration then table.remove(state.Shots, index) end
+            if not shot.Attack.TechXTethered and shot.Elapsed >= shot.Duration then table.remove(state.Shots, index) end
         end
     end
 
@@ -421,7 +437,7 @@ function Mizuki:UpdatePepperAttacks(player)
     for side = 1, 2 do
         local source
         for _, beam in ipairs(data.MizukiActiveBeams and data.MizukiActiveBeams[side] or {}) do
-            if liveBeam(beam) and beam.Automatic and not beam.Ending then
+            if liveBeam(beam) and beam.Automatic and not beam.Ending and not beam.SpiritSwordDriven then
                 if beam.PersistentEchoMode then echoes[#echoes + 1] = beam
                 else
                     original, source = original or beam, source or beam

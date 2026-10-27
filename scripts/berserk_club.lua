@@ -5,14 +5,48 @@ local P = {SwingFrames = 10, MeleeMultiplier = 3, ThrowMultiplier = 1.5,
     HitInvincibilityFrames = 8, Recoil = 5, Knockback = 10, MinimumThrowCharge = 3,
     MeleeReach = 32, HitboxRadius = 32, ScytheSizeMultiplier = 1.25,
     RotationPivotPixels = 2,
-    HeldIdleRotationOffset = 180, SwingRotationOffset = -90}
+    HeldIdleRotationOffset = 180, HeldBodyRotationOffset = -90, SwingRotationOffset = -90,
+    ActiveBodyRotationOffset = 180,
+    GlowRotationOffset = 90,
+    HeldGlowAxisOffset = 30,
+    ScytheMeleeMultiplier = 1.5, ScytheThrowHitInterval = 1,
+    ScytheThrowBaseMultiplier = 0.4, ScytheThrowOutgoingMultiplier = 0.4,
+    ScytheThrowChargeSpeedDivisor = 3,
+    ThrowHitInterval = 8}
 Mizuki.BerserkClubParameters = P
+-- Use native tear parameters and record the resolved outcome, like other echoes.
+function Mizuki.fireBerserkLungTear(player, position, velocity, multiplier, source, replayMultiplier)
+    local tear = player:FireTear(position, velocity, false, false, false, player, multiplier or 1)
+    tear:GetData().MizukiBerserkLungTear = true
+    tear:ChangeVariant(source and source.Variant or TearVariant.BONE)
+    tear:ClearTearFlags(Mizuki.MIZUKI_FORBIDDEN_TEAR_FLAGS)
+    if source then
+        tear.Scale, tear.Height = source.Scale, source.Height
+        tear.FallingSpeed, tear.FallingAcceleration = source.FallingSpeed, source.FallingAcceleration
+        Mizuki.bindEchoAttackReplay(tear, source.Sequence, {
+            Alpha = Mizuki.CannonEchoReplayAlpha, Tint = true, DamageMultiplier = replayMultiplier})
+        return tear
+    end
+    tear:AddTearFlags(TearFlags.TEAR_EXTRA_GORE)
+    if player:HasCollectible(C.COLLECTIBLE_EYE_OF_THE_OCCULT) then tear:AddTearFlags(TearFlags.TEAR_HOMING) end
+    Mizuki.trackDeadEyeProjectile(player, tear)
+    return {Position = Vector(tear.Position.X, tear.Position.Y), Velocity = Vector(tear.Velocity.X, tear.Velocity.Y),
+        Variant = tear.Variant, Scale = tear.Scale, Height = tear.Height,
+        FallingSpeed = tear.FallingSpeed, FallingAcceleration = tear.FallingAcceleration,
+        Sequence = Mizuki.startEchoAttackRecording(tear)}
+end
+
+function Mizuki.getCannonKnifeArtVariant(knife)
+    return knife:GetData().MizukiCannonKnifeArtVariant or knife.Variant
+end
 local HITBOX_SUBTYPE = 9521
+local swingVolleys = {}
+local meleeBodies = {}
+local MELEE_REPEAT_INTERVAL = 2 -- native 96A783..96A790, 96ADC0..96ADCF
 
 function Mizuki.isBerserkClubActive(player)
     return player and player:Exists() and not player:IsDead()
-        and player:GetEffects():HasCollectibleEffect(C.COLLECTIBLE_BERSERK)
-        and not player:HasCollectible(C.COLLECTIBLE_C_SECTION) or false
+        and player:GetEffects():HasCollectibleEffect(C.COLLECTIBLE_BERSERK) or false
 end
 
 function Mizuki.cannonUsesKnifeWeapon(player)
@@ -27,6 +61,13 @@ function Mizuki.getCannonKnifeWeaponVariant(player)
         return 3
     end
     return 0
+end
+
+-- Resolve the weapon before applying Lung. Bone Scythe keeps the native
+-- small-knife volley; ordinary bone weapons use our recorded bone-tear scatter.
+function Mizuki.getBerserkLungScatterKind(weaponVariant)
+    if weaponVariant == 2 then return "knife" end
+    if weaponVariant == 3 or weaponVariant == 10 then return "bone" end
 end
 
 local function valid(entity, seed)
@@ -54,7 +95,8 @@ end
 
 function Mizuki.shouldRenderBerserkClubChargeBar(data)
     local state = data.MizukiBerserkInput
-    return state and state.Held and state.Phase == 'charging' and state.Side ~= nil
+    return state and (state.Held or Mizuki.isReleaseProtected(state.ChargeReleaseHoldUntil))
+        and state.Phase == 'charging' and state.Side ~= nil
         and (data.MizukiCharge or 0) > 0 or false
 end
 
@@ -75,49 +117,41 @@ function Mizuki.getBerserkSwingDirection(data)
             end
         end
     end
+    for body, seed in pairs(meleeBodies) do
+        if not valid(body, seed) then meleeBodies[body] = nil
+        else
+            local swing = body:GetData().MizukiBerserkSwing
+            if swing and not swing.Echo and valid(swing.Player, swing.PlayerSeed) and swing.Player:GetData() == data
+                and Game():GetFrameCount() < swing.Frame + swing.Duration
+                and (not latestSwingFrame or swing.Frame > latestSwingFrame) then
+                direction, latestSwingFrame = swing.Direction, swing.Frame
+            end
+        end
+    end
     return direction
 end
 
-local facingActions = {
-    [ButtonAction.ACTION_SHOOTLEFT] = Vector(-1, 0),
-    [ButtonAction.ACTION_SHOOTRIGHT] = Vector(1, 0),
-    [ButtonAction.ACTION_SHOOTUP] = Vector(0, -1),
-    [ButtonAction.ACTION_SHOOTDOWN] = Vector(0, 1),
-}
-
-local function holdSwingHeadDirection(_, entity, hook, action)
-    if not facingActions[action] or not entity then return end
-    local player = entity:ToPlayer()
-    if not player or not Mizuki.isMizuki(player) or not player:AreControlsEnabled()
-        or not Mizuki.isBerserkClubActive(player) then return end
-    local direction = Mizuki.getBerserkSwingDirection(player:GetData())
-    if not direction then return end
-    local chosenAction
-    if math.abs(direction.X) > math.abs(direction.Y) then
-        chosenAction = direction.X < 0 and ButtonAction.ACTION_SHOOTLEFT or ButtonAction.ACTION_SHOOTRIGHT
-    else
-        chosenAction = direction.Y < 0 and ButtonAction.ACTION_SHOOTUP or ButtonAction.ACTION_SHOOTDOWN
-    end
-    if hook == InputHook.IS_ACTION_PRESSED then return action == chosenAction end
-    if hook == InputHook.GET_ACTION_VALUE then return action == chosenAction and 0.01 or 0 end
-end
-Mizuki:AddCallback(ModCallbacks.MC_INPUT_ACTION, holdSwingHeadDirection, InputHook.IS_ACTION_PRESSED)
-Mizuki:AddCallback(ModCallbacks.MC_INPUT_ACTION, holdSwingHeadDirection, InputHook.GET_ACTION_VALUE)
-
-local function beginSwing(cannon, direction, alternate)
-    local knife = Mizuki.ensureCannonKnife(cannon)
+local function beginSwing(cannon, direction, alternate, body, source, echo)
+    local knife = body or Mizuki.ensureCannonKnife(cannon)
     if not knife or knife:IsFlying() then return false end
     local player, data = cannon.Player, knife:GetData()
     removeSwingHitbox(data.MizukiBerserkSwing)
     -- Native BONE parameters include the Berserk EXTRA_GORE flag. This marks
     -- enemies for the engine's kill reward (duration/speed/invincibility).
-    local params = player:GetTearHitParams(WeaponType.WEAPON_BONE, 1, 1, knife)
+    local params = source and {TearFlags = source.Flags, TearDamage = 0}
+        or player:GetTearHitParams(WeaponType.WEAPON_BONE, 1, 1, knife)
     knife.TearFlags = params.TearFlags | TearFlags.TEAR_EXTRA_GORE
-    data.MizukiCannonKnifeDrawColor = Color.Lerp(params.TearColor, params.TearColor, 0)
-    local hidden = Color.Lerp(params.TearColor, params.TearColor, 0)
-    hidden.A = 0
-    knife.Color = hidden
-    local sword = knife.Variant == 10
+    local weaponColor = source and source.Color
+        or player:GetData().MizukiMomKnifeBaseColor or Color.Default
+    if echo then weaponColor = Mizuki.getCannonEchoColor(weaponColor, Mizuki.CannonEchoReplayAlpha) end
+    local bodyColor = Color.Lerp(weaponColor, weaponColor, 0)
+    if data.MizukiCannonKnifeNativeRender ~= true then
+        data.MizukiCannonKnifeDrawColor = Color.Lerp(weaponColor, weaponColor, 0)
+        bodyColor.A = 0
+    end
+    knife.Color = bodyColor
+    knife:GetSprite().Color = bodyColor
+    local sword = Mizuki.getCannonKnifeArtVariant(knife) == 10
     local anim = sword and (alternate and 'AttackLeft' or 'AttackRight')
         or (alternate and 'Swing2' or 'Swing')
     local sprite = knife:GetSprite()
@@ -139,31 +173,88 @@ local function beginSwing(cannon, direction, alternate)
     knife.SpriteRotation = sword and knife.Rotation or knife.Rotation + P.SwingRotationOffset
     local swing = {Frame = Game():GetFrameCount(), Animation = anim,
         Direction = Vector(direction.X, direction.Y), Targets = {}, Interactions = {},
-        Damage = params.TearDamage * P.MeleeMultiplier,
-        MaxHits = knife.Variant == 2 and 2 or 1, Player = player,
+        Damage = params.TearDamage * (Mizuki.getCannonKnifeArtVariant(knife) == 2
+            and P.ScytheMeleeMultiplier or P.MeleeMultiplier),
+        MaxHits = Mizuki.getCannonKnifeArtVariant(knife) == 2 and 2 or 1, Player = player,
         PlayerSeed = player.InitSeed, Sword = sword, VisualSprite = swingSprite,
-        Duration = sword and 8 or P.SwingFrames}
-    if sword then swing.Damage = params.TearDamage * 1.5 + 1.75 end
+        Duration = sword and 8 or P.SwingFrames, Alternate = alternate,
+        Cannon = cannon, CannonSeed = cannon.InitSeed, Body = knife,
+        Flags = knife.TearFlags, Color = Color.Lerp(weaponColor, weaponColor, 0),
+        WeaponVariant = Mizuki.getCannonKnifeArtVariant(knife),
+        Scale = Vector(knife.SpriteScale.X, knife.SpriteScale.Y), Echo = echo == true,
+        Source = source,
+        AnchorOffset = source and source.AnchorOffset
+            or (Mizuki.getCannonKnifeAnchor(cannon) - cannon.Position)}
+    if source then
+        swing.Damage, swing.MaxHits, swing.Duration = source.Damage, source.MaxHits, source.Duration
+    elseif sword then swing.Damage = params.TearDamage * 1.5 + 1.75 end
     data.MizukiBerserkSwing = swing
-    if Mizuki.rollSpecialBrimstone then Mizuki.rollSpecialBrimstone(knife, player) end
-    SFXManager():Play(SoundEffect.SOUND_SHELLGAME, 1, 0, false, 1)
+    if not echo then
+        swing.DeadEyeAttack = Mizuki.trackDeadEyeSwing(player, knife, swing.Duration)
+        Mizuki.rollSpecialBrimstone(knife, player)
+    else data.MizukiSpecialBrimstoneCurse = source.Curse end
+    swing.Curse = data.MizukiSpecialBrimstoneCurse
+    local playerData, frame = player:GetData(), Game():GetFrameCount()
+    if not echo and playerData.MizukiBerserkSwingSoundFrame ~= frame then
+        -- Native bone swing: 0x96A9F5..0x96AA40, sound 252, pitch 0.9..1.1.
+        local pitch = 0.9 + Random() * (0.2 / 4294967296)
+        SFXManager():Play(SoundEffect.SOUND_SHELLGAME, 1, 1, false, pitch)
+        playerData.MizukiBerserkSwingSoundFrame = frame
+    end
     return swing
+end
+
+local function createSwingBody(cannon, direction, alternate, source, echo)
+    local variant = source and source.WeaponVariant or Mizuki.getCannonKnifeWeaponVariant(cannon.Player)
+    local body = Mizuki.createCannonKnifeBody(cannon, Mizuki.getCannonKnifeAnchor(cannon),
+        direction:GetAngleDegrees(), variant, true)
+    if not body then return end
+    local bd = body:GetData()
+    -- Independent melee body, never a registered held/throwing knife.
+    bd.MizukiBerserkMeleeBody, bd.MizukiBerserkMeleeCannon = true, cannon
+    bd.MizukiBerserkMeleeCannonSeed = cannon.InitSeed
+    body.EntityCollisionClass = EntityCollisionClass.ENTCOLL_NONE
+    if source then body.SpriteScale = Vector(source.Scale.X, source.Scale.Y) end
+    local swing = beginSwing(cannon, direction, alternate, body, source, echo)
+    if not swing then body:Remove(); return end
+    meleeBodies[body] = body.InitSeed
+    return swing
+end
+
+function Mizuki.replayBerserkClubSwing(player, ghost, source, multiplier)
+    local swing = createSwingBody(ghost, source.Direction, not source.Alternate, source, true)
+    if swing then swing.Damage = source.Damage * multiplier end
+    return swing
+end
+
+function Mizuki.getBerserkSwingEchoPosition(source)
+    if valid(source.Cannon, source.CannonSeed) then return source.Cannon.Position end
 end
 
 function Mizuki.updateBerserkClubInput(player, data, held, direction, profile, fire)
     local state = data.MizukiBerserkInput or {Held = false, Cooldown = 0}
     data.MizukiBerserkInput = state
     state.Cooldown = math.max(0, state.Cooldown - 1)
-    if held and not state.Held then
+    local milk = player:HasCollectible(C.COLLECTIBLE_SOY_MILK)
+        or player:HasCollectible(C.COLLECTIBLE_ALMOND_MILK)
+    local continuousMelee = milk or data.MizukiKidneyStoneBurst ~= nil
+    local charge, resumed, protected = Mizuki.protectChargeRelease(state, held,
+        continuousMelee and 0 or (data.MizukiCharge or 0), continuousMelee)
+    data.MizukiCharge = charge
+    if resumed and state.ChargeStartFrame then
+        state.ChargeStartFrame = Game():GetFrameCount() - charge
+    elseif held and not state.Held then
         state.Direction, state.Side, state.ChargeStartFrame = direction, nil, nil
         state.Phase = 'waiting'
         data.MizukiCharge, data.MizukiChargeBarFullFrames = 0, nil
     end
     -- Cooldown gates starting the whole melee-then-charge sequence.
     -- A held press waits here until it can perform a real initial swing.
+    if held and continuousMelee and state.Cooldown == 0 then state.Phase = 'waiting' end
     if held and state.Phase == 'waiting' and state.Cooldown == 0 then
         local nextShotSide = -(data.MizukiShotSide or -1)
         local side = nextShotSide == -1 and 1 or 2
+        if Mizuki.hasCannonTech2(player) then side = 1 end
         local alternate = not state.Alternate
         local swung = false
         for _, cannon in ipairs(data.MizukiCannons[side] or {}) do
@@ -173,21 +264,44 @@ function Mizuki.updateBerserkClubInput(player, data, held, direction, profile, f
                 local swing = beginSwing(cannon, direction, alternate)
                 if swing then
                     swung = true
+                    if not state.Volley then
+                        local angles, count = Mizuki.getSpiritSwordVolley(player)
+                        data.MizukiFiniteVolleyId = (data.MizukiFiniteVolleyId or 0) + 1
+                        state.EchoVolleyId = data.MizukiFiniteVolleyId
+                        state.Volley = {Player = player, PlayerSeed = player.InitSeed,
+                            Side = side, Direction = Vector(direction.X, direction.Y),
+                            Alternate = alternate, Angles = angles, Count = count,
+                            Next = 2, Frame = swing.Frame, Duration = swing.Duration,
+                            Cannons = {}, Echo = Mizuki.beginCannonEchoShot(player, side, state.EchoVolleyId)}
+                        swingVolleys[#swingVolleys + 1] = state.Volley
+                    end
+                    local volley = state.Volley
+                    volley.Cannons[#volley.Cannons + 1] = {Entity = cannon, Seed = cannon.InitSeed}
+                    if volley.Echo then Mizuki.captureCannonEchoBerserkSwing(volley.Echo, swing) end
+                    for index = 2, #volley.Angles do
+                        local extra = createSwingBody(cannon, direction:Rotated(volley.Angles[index]), alternate)
+                        if extra and volley.Echo then Mizuki.captureCannonEchoBerserkSwing(volley.Echo, extra) end
+                    end
                     state.ChargeStartFrame = math.max(state.ChargeStartFrame or 0,
-                        swing.Frame + swing.Duration)
+                        swing.Frame + swing.Duration + (volley.Count - 1) * MELEE_REPEAT_INTERVAL)
                 end
             end
         end
         if swung then
             data.MizukiShotSide, state.Side, state.Alternate = nextShotSide, side, alternate
-            state.Cooldown = math.max(1, player.MaxFireDelay + 1)
+            state.Cooldown = math.max(Mizuki.getFireInterval(player),
+                (state.Volley.Count - 1) * MELEE_REPEAT_INTERVAL)
             state.Phase = 'swinging'
+            Mizuki.recordMeleeAttackEffects(player, side, direction)
+            Mizuki.chargeIsaacsTearsFromAttack(player, 1)
+            state.Volley = nil
         end
     end
     if held then
         state.Direction = direction or state.Direction
         -- Charging continues the same sequence as soon as its melee animation
         -- ends; it does not require a second cooldown check.
+        if continuousMelee then state.ChargeStartFrame = nil end
         if state.Side and state.ChargeStartFrame
             and Game():GetFrameCount() >= state.ChargeStartFrame then
             state.Phase = 'charging'
@@ -198,23 +312,24 @@ function Mizuki.updateBerserkClubInput(player, data, held, direction, profile, f
         data.MizukiChargeBarFullFrames = data.MizukiCharge >= profile.MaxFrames
             and ((data.MizukiChargeBarFullFrames or 0) + 1) or nil
     elseif state.Held then
-        if state.Side and data.MizukiCharge >= math.max(P.MinimumThrowCharge, profile.MinFrames)
-            and state.Direction then
-            fire(player, state.Direction, data.MizukiCharge, false, state.Side)
+        local minimumThrowCharge = player:HasCollectible(CollectibleType.COLLECTIBLE_MOMS_KNIFE)
+            and profile.MinFrames or math.max(P.MinimumThrowCharge, profile.MinFrames)
+        local throwCharge = milk and profile.MaxFrames or data.MizukiCharge
+        if state.Side and throwCharge >= minimumThrowCharge and state.Direction then
+            fire(player, state.Direction, throwCharge, false, state.Side, state.EchoVolleyId)
+            Mizuki.protectChargeRelease(state, false, 0, true)
+            protected = false
         end
+        if not protected then
+            data.MizukiCharge, data.MizukiAim, data.MizukiChargeBarFullFrames = 0, nil, nil
+            state.Phase, state.ChargeStartFrame, state.Side = 'idle', nil, nil
+        end
+    elseif not held and not protected then
         data.MizukiCharge, data.MizukiAim, data.MizukiChargeBarFullFrames = 0, nil, nil
         state.Phase, state.ChargeStartFrame, state.Side = 'idle', nil, nil
     end
     state.Held = held
 end
-
-local pickupBlacklist = {
-    [PickupVariant.PICKUP_COLLECTIBLE] = true, [PickupVariant.PICKUP_SHOPITEM] = true,
-    [PickupVariant.PICKUP_TROPHY] = true, [PickupVariant.PICKUP_BIGCHEST] = true,
-    [PickupVariant.PICKUP_BED] = true, [PickupVariant.PICKUP_MEGACHEST] = true,
-    [PickupVariant.PICKUP_THROWABLEBOMB] = true,
-}
-local pickupTransfers = {}
 
 local function interact(swing, knife, position, radius)
     local player = swing.Player
@@ -224,7 +339,7 @@ local function interact(swing, knife, position, radius)
             local projectile = entity:ToProjectile()
             local bomb = entity:ToBomb()
             local pickup = entity:ToPickup()
-            if projectile and knife.Variant ~= 2
+            if projectile and Mizuki.getCannonKnifeArtVariant(knife) ~= 2
                 and not projectile:HasProjectileFlags(ProjectileFlags.CANT_HIT_PLAYER) then
                 swing.Interactions[hash] = true
                 projectile.Velocity = swing.Direction:Resized(math.max(8, projectile.Velocity:Length()))
@@ -235,29 +350,8 @@ local function interact(swing, knife, position, radius)
             elseif bomb then
                 swing.Interactions[hash] = true
                 bomb:AddVelocity(swing.Direction * P.Knockback)
-            elseif pickup and not pickupBlacklist[pickup.Variant] and pickup.Price == 0
-                and pickup.Wait <= 0 and pickup:GetSprite():GetAnimation() ~= 'Collect'
-                and not pickup:GetData().MizukiBerserkPickupTransfer then
+            elseif pickup and Mizuki.tryCollectMeleePickup(pickup, player) then
                 swing.Interactions[hash] = true
-                if pickup.Variant == PickupVariant.PICKUP_MIMICCHEST then
-                    pickup:Morph(EntityType.ENTITY_PICKUP, PickupVariant.PICKUP_SPIKEDCHEST,
-                        pickup.SubType, false, true, false)
-                end
-                -- Samael's native-collection transfer preserves pickup effects,
-                -- affordability and chest/room triggers; never manually grant items.
-                local pd = pickup:GetData()
-                pd.MizukiBerserkPickupTransfer = {Position = Vector(pickup.Position.X, pickup.Position.Y),
-                    Player = player, PlayerSeed = player.InitSeed, Frame = Game():GetFrameCount(),
-                    PlayerPosition = Vector(player.Position.X, player.Position.Y),
-                    PickupSeed = pickup.InitSeed, Variant = pickup.Variant,
-                    Color = Color.Lerp(pickup:GetSprite().Color, pickup:GetSprite().Color, 0)}
-                pickupTransfers[GetPtrHash(pickup)] = pd.MizukiBerserkPickupTransfer
-                pickup.Position = player.Position
-                pickup.Velocity = Vector.Zero
-                local hidden = Color.Lerp(pd.MizukiBerserkPickupTransfer.Color,
-                    pd.MizukiBerserkPickupTransfer.Color, 0)
-                hidden.A = 0
-                pickup:GetSprite().Color = hidden
             elseif entity.Type == EntityType.ENTITY_FIREPLACE then
                 swing.Interactions[hash] = true
                 entity:TakeDamage(100, 0, EntityRef(knife), 0)
@@ -279,15 +373,21 @@ function Mizuki.updateBerserkClubSwing(knife, cannon)
     local swing = data.MizukiBerserkSwing
     if not swing then return false end
     local age = Game():GetFrameCount() - swing.Frame
-    if age >= swing.Duration or knife:IsFlying() or not Mizuki.isBerserkClubActive(cannon.Player) then
+    if age >= swing.Duration or knife:IsFlying()
+        or (not swing.Echo and not Mizuki.isBerserkClubActive(cannon.Player)) then
         removeSwingHitbox(swing)
         data.MizukiBerserkSwing = nil
         knife:GetSprite():Play(swing.Sword and 'IdleRight' or 'Idle', true)
         return false
     end
-    local anchor = Mizuki.getCannonKnifeAnchor(cannon)
+    local anchor = swing.Echo and cannon.Position + swing.AnchorOffset or Mizuki.getCannonKnifeAnchor(cannon)
     knife.Position = anchor - knife.PositionOffset
-    knife.Velocity = Vector.Zero
+    knife.Velocity = cannon.Velocity
+    if data.MizukiBerserkMeleeBody == true then
+        knife.DepthOffset = cannon.Position.Y + cannon.DepthOffset - knife.Position.Y + (swing.Echo and 0 or 1)
+        knife.Color = Color(1, 1, 1, 0)
+        knife:GetSprite().Color = knife.Color
+    end
     knife.Rotation = swing.Direction:GetAngleDegrees()
     knife.SpriteRotation = swing.Sword and knife.Rotation or knife.Rotation + P.SwingRotationOffset
     -- The body has no idle/contact damage. Only the explicit swing hitbox
@@ -325,45 +425,43 @@ function Mizuki.updateBerserkClubSwing(knife, cannon)
         swing.Hitbox.SpriteRotation = knife.SpriteRotation
         if swing.LastInteractionFrame ~= Game():GetFrameCount() then
             swing.LastInteractionFrame = Game():GetFrameCount()
+            Mizuki:QueueFirstHitFetusGridBomb(swing.Hitbox)
+            Mizuki.queueEpicFetusGridTarget(swing.Hitbox)
             interact(swing, knife, position, radius)
         end
     else removeSwingHitbox(swing) end
     return true
 end
 
-local damageReplay
+Mizuki:AddCallback(ModCallbacks.MC_POST_KNIFE_UPDATE, function(_, body)
+    local bd = body:GetData()
+    if bd.MizukiBerserkMeleeBody ~= true then return end
+    local cannon = bd.MizukiBerserkMeleeCannon
+    if not valid(cannon, bd.MizukiBerserkMeleeCannonSeed)
+        or not Mizuki.updateBerserkClubSwing(body, cannon) then
+        removeSwingHitbox(bd.MizukiBerserkSwing)
+        meleeBodies[body] = nil
+        body:Remove()
+    end
+end)
+Mizuki:AddCallback(ModCallbacks.MC_POST_KNIFE_RENDER, function(_, body, offset)
+    if body:GetData().MizukiBerserkMeleeBody == true then
+        Mizuki.renderBerserkMeleeKnife(body, offset)
+    end
+end)
+
+local dispatchBerserkKnifeHit
 Mizuki:AddPriorityCallback(ModCallbacks.MC_ENTITY_TAKE_DMG, CallbackPriority.EARLY,
-    function(_, enemy, amount, flags, source, countdown)
+    function(_, enemy, _, flags, source, countdown)
         local attack = source and source.Entity
         if not attack or not enemy:IsVulnerableEnemy() then return end
         local data = attack:GetData()
-        if damageReplay and damageReplay.Attack == GetPtrHash(attack)
-            and damageReplay.Target == GetPtrHash(enemy) then return end
-        if data.MizukiBerserkSwingHitbox == true then
-            local swing = data.MizukiBerserkSwingState
-            if not valid(data.MizukiBerserkBody, data.MizukiBerserkBodySeed)
-                or not valid(swing.Player, swing.PlayerSeed) then return false end
-            local hash, frame = GetPtrHash(enemy), Game():GetFrameCount()
-            local previous = swing.Targets[hash]
-            if previous and previous.Seed == enemy.InitSeed
-                and (previous.Count >= swing.MaxHits or frame - previous.Frame < 3) then return false end
-            enemy:AddEntityFlags(EntityFlag.FLAG_EXTRA_GORE)
-            -- Re-enter once to fix this custom hitbox's damage without changing
-            -- native flag/on-hit handling or applying the held-knife multiplier twice.
-            damageReplay = {Attack = GetPtrHash(attack), Target = hash}
-            local ok, result = pcall(function()
-                return enemy:TakeDamage(swing.Damage, flags, source, countdown)
-            end)
-            damageReplay = nil
-            if not ok then error(result) end
-            if result then
-                swing.Targets[hash] = {Seed = enemy.InitSeed, Frame = frame,
-                    Count = (previous and previous.Count or 0) + 1}
-                swing.Player:SetMinDamageCooldown(P.HitInvincibilityFrames)
-                enemy:AddVelocity(swing.Direction * P.Knockback)
-                swing.Player:AddVelocity(-swing.Direction * P.Recoil)
-                SFXManager():Play(SoundEffect.SOUND_MEATY_DEATHS, 1, 0, false, 1.5)
-            end
+        if data.MizukiBerserkDamageDispatch == true then return end
+        if data.MizukiBerserkCollisionProxy == true or data.MizukiBerserkSwingHitbox == true then
+            -- Existing independent hitboxes reach this native damage path even
+            -- when PRE_KNIFE_COLLISION does not fire. Dispatch before cancelling
+            -- the native amount; both entries share the same target clock.
+            dispatchBerserkKnifeHit(attack, enemy, flags, countdown, "damage")
             return false
         end
     end)
@@ -375,8 +473,9 @@ Mizuki:AddCallback(ModCallbacks.MC_POST_KNIFE_UPDATE, function(_, hitbox)
         data.MizukiBerserkSwingState
     if not valid(body, data.MizukiBerserkBodySeed) or not valid(cannon, data.MizukiBerserkCannonSeed)
         or body:GetData().MizukiBerserkSwing ~= swing
-        or not Mizuki.isBerserkClubActive(cannon.Player)
-        or Game():GetFrameCount() - swing.Frame > 7 then hitbox:Remove(); return end
+        or (not swing.Echo and not Mizuki.isBerserkClubActive(cannon.Player))
+        or Game():GetFrameCount() - swing.Frame >= 8
+    then hitbox:Remove(); return end
     hitbox.Color = Color(1, 1, 1, 0)
     hitbox:GetSprite().Color = hitbox.Color
     local scale = math.max(math.abs(body.SpriteScale.X), math.abs(body.SpriteScale.Y))
@@ -388,86 +487,100 @@ Mizuki:AddCallback(ModCallbacks.MC_POST_KNIFE_UPDATE, function(_, hitbox)
     hitbox.GridCollisionClass = EntityGridCollisionClass.GRIDCOLL_NONE
 end)
 
--- Native collection is performed at the player for two updates. As in
--- Samael, contents of opened chests/sacks must return to the original site.
-local function restorePickupContents(_, entity)
-    local transfer = pickupTransfers[GetPtrHash(entity)]
-    if transfer and entity.InitSeed ~= transfer.PickupSeed then transfer = nil end
-    if not transfer then
-        local spawner = entity.SpawnerEntity
-        transfer = spawner and spawner:GetData().MizukiBerserkPickupTransfer
+dispatchBerserkKnifeHit = function(knife, enemy, damageFlags, countdown, entry)
+    local data = knife:GetData()
+    if data.MizukiBerserkCollisionProxy ~= true and data.MizukiBerserkSwingHitbox ~= true then return end
+    if not enemy:IsVulnerableEnemy() or enemy:HasEntityFlags(EntityFlag.FLAG_FRIENDLY) then return true end
+    local swing = data.MizukiBerserkSwingHitbox and data.MizukiBerserkSwingState
+    local player = swing and swing.Player or (knife.SpawnerEntity and knife.SpawnerEntity:ToPlayer())
+    if not player or not player:Exists() then return true end
+    local frame = Game():GetFrameCount()
+    if swing then
+        if not valid(data.MizukiBerserkBody, data.MizukiBerserkBodySeed)
+            or data.MizukiBerserkBody:GetData().MizukiBerserkSwing ~= swing
+            or frame - swing.Frame < 2 or frame - swing.Frame > 7 then return true end
+    elseif data.MizukiBerserkSwing or not knife:IsFlying() then return true end
+    local targets = swing and swing.Targets or data.MizukiBerserkThrowTargets or {}
+    if not swing then data.MizukiBerserkThrowTargets = targets end
+    local key, previous = GetPtrHash(enemy), targets[GetPtrHash(enemy)]
+    local scytheThrow = not swing and data.MizukiBerserkCollisionProxy == true
+        and Mizuki.getCannonKnifeArtVariant(knife) == 2
+    -- Game:GetFrameCount advances at the 30 Hz logic rate: one update is the
+    -- wiki's two rendered frames. Both collision entries still share a clock.
+    local interval = swing and 3 or (scytheThrow and P.ScytheThrowHitInterval or P.ThrowHitInterval)
+    if previous and previous.Seed == enemy.InitSeed
+        and ((swing and previous.Count >= swing.MaxHits) or frame - previous.Frame < interval) then return true end
+    local damage = swing and swing.Damage or knife.CollisionDamage
+    if scytheThrow then
+        -- Native Bone Scythe hit (0x966A77-0x966AB5). Negative/zero velocity
+        -- gives the fixed return multiplier; charge/speed reduce outward damage.
+        local speed = Mizuki.getCannonKnifeMotionVelocity(knife)
+        local outgoing = math.max(0, math.min(1, knife.Charge * speed / P.ScytheThrowChargeSpeedDivisor))
+        damage = damage * (P.ScytheThrowBaseMultiplier + P.ScytheThrowOutgoingMultiplier * outgoing)
     end
-    if not transfer then
-        local closest
-        for _, candidate in pairs(pickupTransfers) do
-            if Game():GetFrameCount() - candidate.Frame < 2 then
-                local distance = entity.Position:DistanceSquared(candidate.PlayerPosition)
-                if distance <= 25 and (not closest or distance < closest) then
-                    closest, transfer = distance, candidate
+    if data.MizukiBerserkCollisionProxy == true then
+        local child = data.MizukiEchoKnife == true and data.MizukiEchoChild
+        local multiplier = child and child.Shot.DamageMultiplier
+            or (Mizuki.getPersistentEchoKnifeMultiplier(knife))
+        damage = damage * (multiplier or 1)
+    end
+    enemy:AddEntityFlags(EntityFlag.FLAG_EXTRA_GORE)
+    data.MizukiBerserkDamageDispatch = true
+    local ok, accepted = pcall(function()
+        return enemy:TakeDamage(damage, damageFlags or 0, EntityRef(knife), countdown or 0)
+    end)
+    data.MizukiBerserkDamageDispatch = nil
+    if not ok then error(accepted) end
+    if accepted then
+        targets[key] = {Seed = enemy.InitSeed, Frame = frame, Count = (previous and previous.Count or 0) + 1}
+        local deadEyeAttack = swing and swing.DeadEyeAttack or data.MizukiDeadEyeAttack
+        if deadEyeAttack then deadEyeAttack.Hit = true end
+        if swing then
+            if not swing.HitFeedbackPlayed then
+                swing.HitFeedbackPlayed = true
+                SFXManager():Play(SoundEffect.SOUND_MEATY_DEATHS, 1, 0, false, 1.5)
+                player:AddVelocity(-swing.Direction * P.Recoil)
+            end
+            player:SetMinDamageCooldown(P.HitInvincibilityFrames)
+            enemy:AddVelocity(swing.Direction * P.Knockback)
+        end
+    end
+    return true -- Cancel native knife damage and its collision response.
+end
+Mizuki:AddCallback(ModCallbacks.MC_PRE_KNIFE_COLLISION, function(_, knife, enemy)
+    return dispatchBerserkKnifeHit(knife, enemy)
+end)
+
+-- Complete the native-style short volley even after the original tap ends.
+Mizuki:AddCallback(ModCallbacks.MC_POST_PEFFECT_UPDATE, function(_, player)
+    if Game():IsPaused() then return end
+    local frame = Game():GetFrameCount()
+    for index = #swingVolleys, 1, -1 do
+        local volley = swingVolleys[index]
+        if not valid(volley.Player, volley.PlayerSeed) or not Mizuki.isBerserkClubActive(volley.Player)
+            or frame < volley.Frame or volley.Next > volley.Count then
+            table.remove(swingVolleys, index)
+        elseif volley.Player == player then
+            if frame >= volley.Frame + (volley.Next - 1) * MELEE_REPEAT_INTERVAL then
+                local alternate = (volley.Next % 2 == 1) == volley.Alternate
+                local fired = false
+                for _, member in ipairs(volley.Cannons) do
+                    if valid(member.Entity, member.Seed) then
+                        for _, angle in ipairs(volley.Angles) do
+                            local swing = createSwingBody(member.Entity, volley.Direction:Rotated(angle), alternate)
+                            if swing then
+                                fired = true
+                                if volley.Echo then Mizuki.captureCannonEchoBerserkSwing(volley.Echo, swing) end
+                            end
+                        end
+                    end
                 end
+                if fired then
+                    Mizuki.recordMeleeAttackEffects(player, volley.Side, volley.Direction)
+                    Mizuki.chargeIsaacsTearsFromAttack(player, 1)
+                end
+                volley.Next = volley.Next + 1
             end
         end
     end
-    if transfer then
-        entity.Position = Vector(transfer.Position.X, transfer.Position.Y)
-        local pickup = entity:ToPickup()
-        if pickup then pickup.TargetPosition = entity.Position end
-    end
-end
-Mizuki:AddCallback(ModCallbacks.MC_POST_PICKUP_INIT, restorePickupContents)
-Mizuki:AddCallback(ModCallbacks.MC_FAMILIAR_INIT, restorePickupContents)
-Mizuki:AddCallback(ModCallbacks.MC_POST_EFFECT_INIT, restorePickupContents)
-Mizuki:AddCallback(ModCallbacks.MC_POST_NPC_INIT, restorePickupContents)
-for _, variant in ipairs({BombVariant.BOMB_TROLL, BombVariant.BOMB_SUPERTROLL,
-    BombVariant.BOMB_GOLDENTROLL}) do
-    Mizuki:AddCallback(ModCallbacks.MC_POST_BOMB_INIT, restorePickupContents, variant)
-end
-Mizuki:AddCallback(ModCallbacks.MC_POST_UPDATE, function()
-    for hash, transfer in pairs(pickupTransfers) do
-        if Game():GetFrameCount() - transfer.Frame >= 2 then pickupTransfers[hash] = nil end
-    end
-end)
-Mizuki:AddCallback(ModCallbacks.MC_POST_NEW_ROOM, function() pickupTransfers = {} end)
-
-Mizuki:AddCallback(ModCallbacks.MC_POST_PICKUP_UPDATE, function(_, pickup)
-    local data = pickup:GetData()
-    local transfer = data.MizukiBerserkPickupTransfer
-    if not transfer or Game():GetFrameCount() - transfer.Frame < 2 then return end
-    pickup:GetSprite().Color = transfer.Color
-    if pickup:GetSprite():GetAnimation() ~= 'Collect' then
-        pickup.Position = transfer.Position
-        pickup.Velocity = valid(transfer.Player, transfer.PlayerSeed)
-            and (transfer.Position - transfer.Player.Position):Resized(5) or Vector.Zero
-    end
-    data.MizukiBerserkPickupTransfer = nil
-end)
-
-Mizuki:AddCallback(ModCallbacks.MC_POST_PICKUP_RENDER, function(_, pickup)
-    local transfer = pickup:GetData().MizukiBerserkPickupTransfer
-    if not transfer then return end
-    local sprite = pickup:GetSprite()
-    local hidden = sprite.Color
-    sprite.Color = transfer.Color
-    sprite:Render(Isaac.WorldToScreen(transfer.Position), Vector.Zero, Vector.Zero)
-    sprite.Color = hidden
-end)
-
-Mizuki:AddCallback(ModCallbacks.MC_ENTITY_TAKE_DMG, function(_, entity, _, _, source)
-    local pickup = source and source.Entity and source.Entity:ToPickup()
-    if not entity:ToPlayer() then return end
-    local attacker = source and source.Entity
-    if attacker and attacker.Type == EntityType.ENTITY_POLTY then
-        for _, transfer in pairs(pickupTransfers) do
-            if transfer.Variant == PickupVariant.PICKUP_HAUNTEDCHEST
-                and valid(transfer.Player, transfer.PlayerSeed)
-                and GetPtrHash(transfer.Player) == GetPtrHash(entity)
-                and Game():GetFrameCount() - transfer.Frame < 2 then return false end
-        end
-    end
-    if not pickup then return end
-    local transfer = pickup:GetData().MizukiBerserkPickupTransfer
-    if transfer and valid(transfer.Player, transfer.PlayerSeed)
-        and GetPtrHash(transfer.Player) == GetPtrHash(entity)
-        and (pickup.Variant == PickupVariant.PICKUP_SPIKEDCHEST
-            or pickup.Variant == PickupVariant.PICKUP_MIMICCHEST) then return false end
 end)

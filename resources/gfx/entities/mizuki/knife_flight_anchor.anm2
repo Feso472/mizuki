@@ -1,0 +1,19 @@
+<AnimatedActor>
+    <Info CreatedBy="Mizuki Mod" Version="1" Fps="30" />
+    <Content>
+        <Spritesheets />
+        <Layers />
+        <Nulls />
+        <Events />
+    </Content>
+    <Animations DefaultAnimation="Idle">
+        <Animation Name="Idle" FrameNum="1" Loop="true">
+            <RootAnimation>
+                <Frame XPosition="0" YPosition="0" XScale="100" YScale="100" Delay="1" Visible="false" RedTint="255" GreenTint="255" BlueTint="255" AlphaTint="0" RedOffset="0" GreenOffset="0" BlueOffset="0" Rotation="0" Interpolated="false" />
+            </RootAnimation>
+            <LayerAnimations />
+            <NullAnimations />
+            <Triggers />
+        </Animation>
+    </Animations>
+</AnimatedActor>

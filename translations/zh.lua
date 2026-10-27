@@ -26,6 +26,12 @@ return {
         ContinueEID = "继续挑战可获得更多道具#{{Warning}} 拾取道具将结束三连打",
     },
     Fan = {
+        Description = "可靠的小帮手",
+        NativeInfo = {
+            "50%概率抵挡敌方泪弹",
+            "每层给予一个角色需要的掉落物",
+            "清理房间后有概率给予额外掉落物",
+        },
         Name = "小博兔",
         EID = "{MIZUKI_FAN_BLOCK_CHANCE}%概率抵挡敌方泪弹{MIZUKI_FAN_BFFS_BLOCK}{MIZUKI_FAN_C_SECTION}"
             .. "#每层掉落1个角色最需要的掉落物"

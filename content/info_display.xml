@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<collectibles>
+    <collectible id="0">
+        <info text="50%概率抵挡敌方泪弹" />
+        <info text="每层给予一个角色需要的掉落物" />
+        <info text="清理房间后有概率给予额外掉落物" />
+    </collectible>
+</collectibles>

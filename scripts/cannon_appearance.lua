@@ -1,5 +1,5 @@
--- Attack art changes only the manually drawn cannon body. Its familiar sprite,
--- shadow, collision, beam and knife remain independent of this visual state.
+-- Shared attack art for the cannon body and its visible sword attachment.
+-- Familiar shadows, collision, beam parameters and real knives stay independent.
 local appearances, variants, ordered = {}, {}, {}
 local itemConfig = Isaac.GetItemConfig()
 local json = require("json")
@@ -23,9 +23,9 @@ end
 
 function Mizuki.canUseCannonAttackAppearance(player, data)
     return player and player:Exists() and Mizuki.isMizuki(player)
-        and not player:HasCollectible(CollectibleType.COLLECTIBLE_C_SECTION)
-        and not Mizuki.cannonUsesKnifeWeapon(player)
-        and not player:HasCollectible(CollectibleType.COLLECTIBLE_SPIRIT_SWORD)
+        and not Mizuki.usesCSectionWeapon(player)
+        and (not Mizuki.cannonUsesKnifeWeapon(player)
+            or (data.CannonSide == 2 and Mizuki.hasCannonTech2(player)))
         and not data.MizukiAwaitingInitialLayout
 end
 
@@ -121,7 +121,10 @@ function Mizuki.resolveCannonAttackAppearance(player, attack, baseDamage)
                 selected, priority = definition.Id, definition.Priority
             end
         end
-        local ratio = baseDamage and baseDamage > 0 and attack.CollisionDamage / baseDamage
+        -- The additional Brimstone factor is deterministic, not a random proc.
+        local brimstoneMultiplier = attack:GetData().MizukiBrimstoneDamageMultiplier or 1
+        local ratio = baseDamage and baseDamage > 0
+            and attack.CollisionDamage / (baseDamage * brimstoneMultiplier)
         local function matches(multiplier)
             if not ratio then return false end
             local epsilon = 0.0001 * math.max(1, math.abs(ratio))
@@ -238,6 +241,15 @@ end
 
 Mizuki.getCannonAttackAppearance = resolvedCannonAppearance
 
+-- Visible native attachments resolve exactly the same appearance as the cannon.
+-- The caller loads this definition into its entity sprite; no second draw.
+function Mizuki.getCannonAttackAppearanceDefinition(cannon)
+    if not Mizuki.canUseCannonAttackAppearance(cannon.Player, cannon:GetData()) then return nil end
+    local id = resolvedCannonAppearance(cannon)
+    local source = (cannon:GetData().MizukiCannonAttackAppearanceSprites or {})[id]
+    return appearances[id], source and source:GetFrame() or 0
+end
+
 function Mizuki.clearCannonAttackAppearance(cannon)
     local data = cannon:GetData()
     data.MizukiCannonAttackAppearanceKey = nil
@@ -260,7 +272,6 @@ function Mizuki.setCannonAttackAppearance(cannon, tearVariant, duration)
         and Game():GetFrameCount() + math.max(1, duration) or nil
 end
 
--- Source poses and finite echoes carry the key, not a shared mutable Sprite.
 function Mizuki.renderCannonAttackAppearance(cannon, poseSprite, position)
     local data = cannon:GetData()
     if not Mizuki.canUseCannonAttackAppearance(cannon.Player, data) then
@@ -298,10 +309,14 @@ end
 
 local C, T, F = CollectibleType, TearVariant, TearFlags
 local function register(id, variant, file, animation, category, priority, sources, flag, layers)
+    -- Native frame rectangles; sword attachment uses their edges, not alpha pixels.
+    local size = id == "scythe" and 64
+        or (id == "bone" or id == "booger" or id == "spore" or id == "black_tooth"
+            or id == "tooth" or id == "razor" or id == "egg") and 48 or 32
     Mizuki.registerCannonAttackAppearance(id, {Variants = {variant},
         Anm2 = "gfx/" .. file .. ".anm2", Animation = animation,
         Category = category, Priority = priority, Sources = sources, Flag = flag,
-        Layers = layers or {0}, Scale = 1})
+        Layers = layers or {0}, Scale = 1, SwordFrameSize = {X = size, Y = size}})
 end
 local function source(id) return {{Id = id}} end
 register("scythe", T.SCHYTHE, "002.008_scythe tear", "Rotate3", "permanent", 10, source(C.COLLECTIBLE_DEATHS_TOUCH))

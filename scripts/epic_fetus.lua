@@ -1,15 +1,12 @@
 -- Epic Fetus target handling plus the radial beam helper the multishot code
 -- uses.
 --
--- Extracted from main.lua. main publishes the helpers this file needs on the
--- Mizuki table; the functions below are published there in turn for the code
--- that stayed behind.
+-- Shared beam and character helpers are loaded before this controller.
 
 local IMMACULATE_HEART_FALLING_ACCELERATION = Mizuki.IMMACULATE_HEART_FALLING_ACCELERATION
 local LEAD_PENCIL_BLOOD_CLOT_COLOR = Mizuki.LEAD_PENCIL_BLOOD_CLOT_COLOR
 local isMizuki = Mizuki.isMizuki
 local tryFireImmaculateHeartTear = Mizuki.tryFireImmaculateHeartTear
-local advanceLeadPencil = Mizuki.advanceLeadPencil
 
 -- FireTechLaser creates the same native Technology laser used by the player
 -- weapon system, including its tear-size initialization and firing sound.
@@ -115,27 +112,13 @@ local function updateEpicFetusStrikes(player, data)
     end
 end
 
-local function getMizukiBeamOwnerFromDamageSource(source)
-    local entity = source and source.Entity
-    if not entity then return nil end
-
-    local player = entity:ToPlayer()
-    if player and isMizuki(player) then return player end
-
-    local laser = entity:ToLaser()
-    if laser then
-        local owner = laser:GetData().MizukiBeamOwner
-        if owner and owner:Exists() and isMizuki(owner) then return owner end
+local function getSpiritSwordWaveOwner(tear)
+    if not tear or (tear.Variant ~= 47 and tear.Variant ~= 49) then return nil end
+    for _, entity in pairs({Parent = tear.Parent, Spawner = tear.SpawnerEntity}) do
+        local familiar = entity:ToFamiliar()
+        local player = entity:ToPlayer() or familiar and familiar.Player
+        if player and player:Exists() and isMizuki(player) then return player end
     end
-
-    local familiar = entity:ToFamiliar()
-    if familiar and (familiar.Variant == Mizuki.CannonVariant
-        or familiar.Variant == Mizuki.CannonEchoVariant) then
-        local owner = familiar.Player
-        if owner and owner:Exists() and isMizuki(owner) then return owner end
-    end
-
-    return nil
 end
 
 local EPIC_FETUS_GRID_TARGET_TYPES = {
@@ -168,7 +151,11 @@ local function getEpicFetusDoorSlotTarget(room, slot)
     return room:GetClampedPosition(slotPosition, 0)
 end
 
-local function getEpicFetusGridTarget(laser)
+local function getEpicFetusGridTarget(laser, includeWalls)
+    if laser:IsCircleLaser() then
+        local position = Mizuki.getFetusRingGridTarget(laser, includeWalls)
+        return position, position and position:Distance(laser.Position)
+    end
     local room = Game():GetRoom()
     local endpoint = laser:GetEndPoint()
     local direction = Vector.FromAngle(laser.AngleDegrees)
@@ -186,7 +173,8 @@ local function getEpicFetusGridTarget(laser)
         local position = hitPosition + direction * offset
         local grid = room:GetGridEntityFromPos(position)
         if grid and grid.CollisionClass ~= GridCollisionClass.COLLISION_NONE
-            and EPIC_FETUS_GRID_TARGET_TYPES[grid:GetType()] then
+            and (EPIC_FETUS_GRID_TARGET_TYPES[grid:GetType()]
+                or (includeWalls and grid:GetType() == GridEntityType.GRID_WALL)) then
             return Vector(grid.Position.X, grid.Position.Y), hitDistance
         end
     end
@@ -202,35 +190,37 @@ local function getEpicFetusGridTarget(laser)
         end
     end
 
-    -- Walls and all non-physical floor grids intentionally fall through.
+    -- Bomb callers exclude ordinary walls; Haemolacria explicitly includes them.
     return nil
 end
 
-local function queueEpicFetusGridTarget(laser)
-    local laserData = laser:GetData()
-    local player = laserData.MizukiBeamOwner
-    if not player
-        or not player:Exists()
-        or not player:HasCollectible(CollectibleType.COLLECTIBLE_EPIC_FETUS)
-    then
-        return
-    end
-
+local function queueEpicFetusGridTarget(entity, contactPosition)
+    if Game():IsPaused() or not entity:Exists() then return end
+    local attack, player = Mizuki.resolveEpicFetusAttack({Entity = entity}, 0, true)
+    if not attack or not player:HasCollectible(CollectibleType.COLLECTIBLE_EPIC_FETUS) then return end
     local data = player:GetData()
-    if not canStartEpicFetusStrike(data) then
-        data.MizukiEpicFetusGridCandidate = nil
-        return
+    if not canStartEpicFetusStrike(data) then return end
+    local d = attack:GetData()
+    local position, distance = contactPosition
+    if not position then
+        if attack:ToLaser() then
+            position, distance = getEpicFetusGridTarget(attack)
+        elseif attack:ToKnife() then
+            -- Sword contacts use its exact capsules through the explicit hook.
+            if d.MizukiSpiritSwordHitbox then return end
+            if not attack:IsFlying() and not d.MizukiBerserkSwingHitbox then return end
+            position = Mizuki.getFetusContactGridTarget(attack.Position, attack.Size)
+        else
+            position = Mizuki.getFetusContactGridTarget(attack.Position, attack.Size)
+        end
     end
-
-    local position, distance = getEpicFetusGridTarget(laser)
     if not position then return end
-
+    distance = distance or position:Distance(attack.Position)
+    local frame = Game():GetFrameCount()
     local candidate = data.MizukiEpicFetusGridCandidate
-    if not candidate or distance < candidate.Distance then
+    if not candidate or candidate.Frame ~= frame or distance < candidate.Distance then
         data.MizukiEpicFetusGridCandidate = {
-            Position = position,
-            Distance = distance,
-            Frame = Game():GetFrameCount(),
+            Position = Vector(position.X, position.Y), Distance = distance, Frame = frame,
         }
     end
 end
@@ -365,14 +355,15 @@ local function considerLudovicoGridPosition(
     return candidate
 end
 
-local function getLudovicoEpicFetusGridCandidate(geometry)
+local function getLudovicoEpicFetusGridCandidate(geometry, includeWalls)
     local room = Game():GetRoom()
     local candidate = nil
     for index = 0, room:GetGridSize() - 1 do
         local grid = room:GetGridEntity(index)
         if grid
             and grid.CollisionClass ~= GridCollisionClass.COLLISION_NONE
-            and EPIC_FETUS_GRID_TARGET_TYPES[grid:GetType()]
+            and (EPIC_FETUS_GRID_TARGET_TYPES[grid:GetType()]
+                or (includeWalls and grid:GetType() == GridEntityType.GRID_WALL))
         then
             candidate = considerLudovicoGridPosition(
                 candidate,
@@ -422,20 +413,20 @@ local function getLudovicoEpicFetusCandidate(player, frame)
     return nil, nil
 end
 
--- Dr. Fetus and Epic Fetus share the same physical grids and valid door slots.
--- Each caller supplies its own collision geometry and trigger lifetime.
-function Mizuki.getFetusContactGridTarget(position, radius)
+-- Bombs share physical grids and valid door slots. Haemolacria also accepts
+-- ordinary walls through the explicit includeWalls option, using the same geometry.
+function Mizuki.getFetusContactGridTarget(position, radius, includeWalls)
     local candidate = getLudovicoEpicFetusGridCandidate({
         Cannons = {{Position = position, Radius = math.max(0, radius or 0)}},
-    })
+    }, includeWalls)
     return candidate and candidate.Position
 end
 
-function Mizuki.getFetusRingGridTarget(laser)
+function Mizuki.getFetusRingGridTarget(laser, includeWalls)
     local candidate = getLudovicoEpicFetusGridCandidate({
         Cannons = {}, RingPosition = laser.Position, RingRadius = laser.Radius,
         RingThickness = math.max(laser.Size or 0, EPIC_FETUS_RING_MIN_THICKNESS),
-    })
+    }, includeWalls)
     return candidate and candidate.Position
 end
 
@@ -457,7 +448,7 @@ end
 
 
 Mizuki.appendCenteredBeamAngles = appendCenteredBeamAngles
-Mizuki.getMizukiBeamOwnerFromDamageSource = getMizukiBeamOwnerFromDamageSource
+Mizuki.getSpiritSwordWaveOwner = getSpiritSwordWaveOwner
 Mizuki.queueEpicFetusGridTarget = queueEpicFetusGridTarget
 Mizuki.getFetusBeamGridTarget = getEpicFetusGridTarget
 Mizuki.canStartEpicFetusStrike = canStartEpicFetusStrike
@@ -467,3 +458,9 @@ Mizuki.captureLudovicoEpicFetusGeometry =
 Mizuki.getLudovicoEpicFetusCandidate = getLudovicoEpicFetusCandidate
 Mizuki.startEpicFetusStrike = startEpicFetusStrike
 Mizuki.updateEpicFetusStrikes = updateEpicFetusStrikes
+
+-- Every producer validates its actual attack identity; no main beam is required.
+for _, callback in ipairs({ModCallbacks.MC_POST_LASER_UPDATE, ModCallbacks.MC_POST_TEAR_UPDATE,
+    ModCallbacks.MC_POST_KNIFE_UPDATE, ModCallbacks.MC_FAMILIAR_UPDATE}) do
+    Mizuki:AddCallback(callback, function(_, entity) queueEpicFetusGridTarget(entity) end)
+end

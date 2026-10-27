@@ -1,0 +1,17 @@
+*.lua text eol=lf
+*.md text eol=lf
+*.xml text eol=lf
+*.png binary
+*.anm2 text eol=lf
+.gitignore text eol=lf
+.editorconfig text eol=lf
+.gitattributes text eol=lf
+
+# Development files never belong in a release archive, even if force-added.
+AGENTS.md export-ignore
+dev/** export-ignore
+dev_backups/** export-ignore
+tools/** export-ignore
+tests/** export-ignore
+docs/** export-ignore
+catalog/** export-ignore

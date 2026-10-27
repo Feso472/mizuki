@@ -108,17 +108,6 @@ do
         saveBirthrightState()
     end
 
-    function Mizuki.HasCompletedBirthright()
-        for index = 0, Game():GetNumPlayers() - 1 do
-            local player = Isaac.GetPlayer(index)
-            if isMizuki(player) and player:HasCollectible(BIRTHRIGHT)
-                and player:HasCollectible(PHD) and player:HasCollectible(FALSE_PHD) then
-                return true
-            end
-        end
-        return false
-    end
-
     function Mizuki.HasBirthright()
         for index = 0, Game():GetNumPlayers() - 1 do
             local player = Isaac.GetPlayer(index)
@@ -1119,7 +1108,7 @@ do
     end
 
     local function createBossChain(room, level, roomIndex, entry)
-        local poolName, encounters = chooseBossEncounters(level, roomIndex)
+        local _, encounters = chooseBossEncounters(level, roomIndex)
         if not encounters then
             return nil
         end
@@ -1142,22 +1131,6 @@ do
                 [2] = true,
             },
         }
-        Isaac.DebugString(table.concat({
-            "[Mizuki] Boss chain pool=",
-            poolName,
-            " stage1 boss=",
-            tostring(encounters[1].bossId),
-            " room=",
-            tostring(encounters[1].roomVariant),
-            " stage2 boss=",
-            tostring(encounters[2].bossId),
-            " room=",
-            tostring(encounters[2].roomVariant),
-            " stage3 boss=",
-            tostring(encounters[3].bossId),
-            " room=",
-            tostring(encounters[3].roomVariant),
-        }))
         lastChainStage = nil
         saveBossChain()
         return bossChain

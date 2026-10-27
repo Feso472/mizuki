@@ -65,6 +65,9 @@ do
     end
 
     local function getKnifeSpriteRotationOffset(knife)
+        if knife:GetData().MizukiBerserkCollisionProxy == true then
+            return Mizuki.BerserkClubParameters.HeldIdleRotationOffset
+        end
         return knife:GetData().MizukiCannonKnifeSpriteRotationOffset
             or (knife.SpriteRotation - knife.Rotation)
     end
@@ -84,13 +87,20 @@ do
             if laser and laser:Exists() and laser:GetData().MizukiEchoBeam == true then
                 laser:Remove()
             end
+            if child.TechXDriven then Mizuki.cancelCannonTechX(child, true) end
             removeEchoKnife(child.Knife)
+            if child.BerserkSwingAttack and child.Knife and child.Knife:Exists()
+                and child.Knife:GetData().MizukiBerserkMeleeBody == true then
+                Mizuki.cancelBerserkClubSwing(child.Knife)
+                child.Knife:Remove()
+            end
         end
         for _, ghost in ipairs(shot.Ghosts) do
             if ghost:Exists() and ghost:GetData().MizukiEchoCannon == true then
                 removeEchoKnife(ghost:GetData().MizukiEchoWaitingKnife)
-                if Mizuki.removeCannonKnifeLaserRoots then Mizuki.removeCannonKnifeLaserRoots(ghost) end
+                Mizuki.removeCannonKnifeLaserRoots(ghost)
                 ghost:GetData().MizukiEchoBodySprite = nil
+                Mizuki.clearSpiritSwordEchoVisuals(ghost)
                 ghost:Remove()
             end
         end
@@ -118,21 +128,22 @@ do
 
     local function eligible(player)
         return Mizuki.hasCannonEcho(player)
-            and not player:HasCollectible(CollectibleType.COLLECTIBLE_C_SECTION)
+            and not Mizuki.usesCSectionWeapon(player)
             and not Mizuki.usesAutomaticBeam(player)
-            and not player:HasCollectible(CollectibleType.COLLECTIBLE_LUDOVICO_TECHNIQUE)
+            and not Mizuki.usesLudovicoWeapon(player)
     end
 
     local knifeDamageReplay
     local function scaleKnifeHit(_, target, amount, flags, source, countdown)
         local knife = source and source.Entity and source.Entity:ToKnife()
         if not knife or not target:IsVulnerableEnemy() then return end
+        if knife:GetData().MizukiBerserkCollisionProxy == true then return end
         local multiplier
         if isEchoKnife(knife) then
             local child = knife:GetData().MizukiEchoChild
             if not child or child.Shot.Removed then return end
             multiplier = child.Shot.DamageMultiplier
-        elseif Mizuki.getPersistentEchoKnifeMultiplier then
+        else
             multiplier = Mizuki.getPersistentEchoKnifeMultiplier(knife)
         end
         if not multiplier then return end
@@ -186,6 +197,14 @@ do
         knife.Visible = true
         knife.SpriteRotation = knife.Rotation + child.KnifeSpriteRotationOffset
         knife.Color = Mizuki.getCannonEchoColor(data.MizukiEchoKnifeBaseColor, ECHO_KNIFE_INITIAL_ALPHA)
+        if data.MizukiBerserkCollisionProxy == true then
+            data.MizukiCannonKnifeManualRender = true
+            data.MizukiCannonKnifeDrawColor = color(knife.Color)
+            local hidden = color(knife.Color)
+            hidden.A = 0
+            knife.Color = hidden
+            knife:GetSprite().Color = hidden
+        end
         knife.DepthOffset = ghost.DepthOffset + ECHO_KNIFE_DEPTH_OFFSET
         return knife
     end
@@ -200,7 +219,7 @@ do
             and isEchoKnife(source) then
             local sourceChild, child = source:GetData().MizukiEchoChild, data.MizukiEchoChild
             if sourceChild and child and sourceChild.Shot == child.Shot
-                and sourceChild.Ghost == child.Ghost then return source end
+                and Mizuki.isSameEntity(sourceChild.Ghost, child.Ghost) then return source end
         end
     end
 
@@ -213,7 +232,10 @@ do
         -- the shadow layer's authored alpha with the same six-frame fade instead.
         local age = shot.FadeFrame and Game():GetFrameCount() - shot.FadeFrame or 0
         local sprite = ghost:GetSprite()
-        sprite:SetFrame("Idle", math.max(0, math.min(FADE_FRAMES, age)))
+        -- Sword echoes are following weapons, without a ground shadow. Frame
+        -- FADE_FRAMES has authored alpha zero, including the native shadow pass.
+        sprite:SetFrame("Idle", (data.MizukiEchoSwordMode or data.MizukiEchoBerserkSwingMode) and FADE_FRAMES
+            or math.max(0, math.min(FADE_FRAMES, age)))
         -- Real cannons reassert this every familiar update too. Keep the frozen
         -- source scale, never a player-size refresh or the body's turning squash.
         ghost.SpriteScale = vector(data.MizukiEchoShadowScale)
@@ -224,6 +246,27 @@ do
         sprite.Color = ghostColor(0)
     end
 
+    local function updateSwordGhostPlacement(ghost, shot)
+        local gd = ghost:GetData()
+        if gd.MizukiEchoBerserkSwingMode == true then
+            local source = gd.MizukiBerserkSwingEchoSource
+            local position = Mizuki.getBerserkSwingEchoPosition(source)
+            if not position then return false end
+            ghost.Position, ghost.Velocity = vector(position), vector(source.Cannon.Velocity)
+            ghost.DepthOffset = source.Cannon.Position.Y + source.Cannon.DepthOffset
+                - position.Y - ECHO_BELOW_SOURCE_DEPTH_OFFSET
+            return true
+        end
+        if ghost:GetData().MizukiEchoSwordMode ~= true then return false end
+        local position = Mizuki.getSpiritSwordEchoPosition(ghost)
+        if not position then return false end
+        ghost.Position, ghost.Velocity = position, vector(shot.Player.Velocity)
+        ghost.DepthOffset = shot.Player.Position.Y + shot.Player.DepthOffset
+            - position.Y - ECHO_BELOW_SOURCE_DEPTH_OFFSET
+        Mizuki.updateSpiritSwordEchoVisuals(ghost)
+        return true
+    end
+
     local function makeGhost(shot, beam)
         local cannon = beam.Cannon
         local source = cannon:GetData()
@@ -232,7 +275,7 @@ do
             Mizuki.CannonEchoVariant, 0, vector(firingPosition), Vector.Zero,
             shot.Player):ToFamiliar()
         ghost.Player = shot.Player
-        ghost.EntityCollisionClass = beam.MomKnifeDriven
+        ghost.EntityCollisionClass = (beam.MomKnifeDriven or beam.SpiritSwordDriven or beam.BerserkSwingDriven)
             and EntityCollisionClass.ENTCOLL_NONE or EntityCollisionClass.ENTCOLL_ENEMIES
         ghost.GridCollisionClass = EntityGridCollisionClass.GRIDCOLL_NONE
         ghost.CollisionDamage = 0
@@ -244,13 +287,20 @@ do
         data.MizukiEchoShot = shot
         data.MizukiEchoAnchor = vector(firingPosition)
         data.MizukiEchoKnifeMode = beam.MomKnifeDriven == true
+        data.MizukiEchoSwordMode = beam.SpiritSwordDriven == true
+        data.MizukiEchoBerserkSwingMode = beam.BerserkSwingDriven == true
         data.MizukiEchoContactDamage = shot.Player.Damage
             * Mizuki.LUDOVICO_CANNON_DAMAGE_MULTIPLIER
             * (source.MizukiContactDamageMultiplier or 1) * shot.DamageMultiplier
         data.MizukiEchoContactInterval = math.max(shot.Player.MaxFireDelay, 1) + 1
         data.MizukiEchoContactClocks = {}
         data.MizukiSpecialBrimstoneCurse = source.MizukiSpecialBrimstoneCurse
-        data.MizukiCannonAttackAppearanceKey = beam.Laser:GetData().MizukiCannonAttackAppearanceKey
+        local attackEntity = beam.AttackEntity or (beam.TrisagionShot and beam.TrisagionShot.Tear or beam.Laser)
+        if beam.SpiritSwordDriven or beam.BerserkSwingDriven then
+            data.MizukiCannonAttackAppearanceKey = beam.AttackAppearanceKey
+        else
+            data.MizukiCannonAttackAppearanceKey = attackEntity:GetData().MizukiCannonAttackAppearanceKey
+        end
         -- Body and laser share the resolved firing snapshot. Reading the live
         -- familiar here can mix its previous pose with the new laser origin.
         -- This base draw position excludes the animated hover displacement.
@@ -306,11 +356,16 @@ do
         if volleyId and previous and previous.VolleyId == volleyId then
             return previous -- Another child of the SAME Cursed Eye release.
         end
-        local other = state.Pending[3 - side]
+        -- Tech 2 reserves the right cannon, so the next independent left shot
+        -- releases its predecessor instead of waiting for a right-side attack.
+        local replaySide = Mizuki.hasCannonTech2(player)
+            and side or 3 - side
+        local other = state.Pending[replaySide]
         if other then
             other.ReplayFrame = Game():GetFrameCount()
-            state.Pending[3 - side] = nil
+            state.Pending[replaySide] = nil
             table.insert(state.Playing, other)
+            if other == previous then previous = nil end
         end
         -- A forced same-side release supersedes an older waiting record; it does
         -- not fabricate an opposite-side event or build an unbounded queue.
@@ -321,6 +376,44 @@ do
         liveShots[shot] = true
         state.Pending[side] = shot
         return shot
+    end
+
+    function Mizuki.captureCannonEchoTrisagion(shot, attack)
+        if shot.Removed or not attack.Cannon or not attack.Cannon:Exists() then return end
+        local hash = GetPtrHash(attack.Cannon)
+        local ghost = shot.GhostByCannon[hash]
+        if not ghost then
+            ghost = makeGhost(shot, attack)
+            shot.GhostByCannon[hash] = ghost
+        end
+        Mizuki.snapshotCannonAttackAppearance(ghost, attack.Tear)
+        shot.Children[#shot.Children + 1] = {
+            Shot = shot, Ghost = ghost, Cannon = ghost, TrisagionShot = attack.TrisagionShot,
+            Direction = vector(attack.Direction), PepperAttack = attack.PepperAttack,
+            Offset = Game():GetFrameCount() - shot.Frame,
+        }
+    end
+
+    function Mizuki.captureCannonEchoSpiritSword(shot, attack)
+        if shot.Removed or not attack.Cannon or not attack.Cannon:Exists() then return end
+        local packet = { Cannon = attack.Cannon, Origin = attack.Cannon.Position,
+            FiringCannonDrawPosition = attack.Anchor, SpiritSwordDriven = true,
+            AttackAppearanceKey = attack.Hitbox:GetData().MizukiCannonAttackAppearanceKey }
+        -- Record the swing now, but do not create a visible waiting sword while
+        -- the player's swing (and the preceding replay) is still in progress.
+        shot.Children[#shot.Children + 1] = { Shot = shot,
+            SpiritSwordAttack = attack, SpiritSwordPacket = packet,
+            SpiritSwordReadyFrame = attack.Frame + attack.Duration,
+            Offset = Game():GetFrameCount() - shot.Frame }
+    end
+
+    function Mizuki.captureCannonEchoBerserkSwing(shot, swing)
+        if shot.Removed or not valid(swing.Cannon, swing.CannonSeed) then return end
+        shot.Children[#shot.Children + 1] = {Shot = shot, BerserkSwingAttack = swing,
+            BerserkSwingPacket = {Cannon = swing.Cannon, Origin = vector(swing.Cannon.Position),
+                FiringCannonDrawPosition = vector(swing.Cannon.Position), BerserkSwingDriven = true},
+            BerserkSwingReadyFrame = swing.Frame + swing.Duration,
+            Offset = Game():GetFrameCount() - shot.Frame}
     end
 
     function Mizuki.captureCannonEchoBeam(shot, beam, charge, baseChargeFrames)
@@ -334,6 +427,7 @@ do
             shot.GhostByCannon[key] = ghost
         end
         Mizuki.snapshotCannonAttackAppearance(ghost, beam.Laser)
+        ghost:GetData().MizukiDeadEyeIntensity = beam.Laser:GetData().MizukiDeadEyeIntensity
         local parameters = {}
         for name, value in pairs(beam.BeamParameters) do parameters[name] = value end
         parameters.Origin = vector(parameters.Origin)
@@ -347,6 +441,7 @@ do
         local child = {Shot = shot, Ghost = ghost, Cannon = ghost,
             BeamParameters = parameters,
             PepperAttack = beam.PepperAttack,
+            BerserkLungShots = beam.BerserkLungShots,
             Offset = Game():GetFrameCount() - shot.Frame,
             Direction = vector(beam.Direction),
             -- A knife-driven laser is already shortened to 1 at release. Its
@@ -354,14 +449,23 @@ do
             Distance = parameters.Distance, ActiveDuration = beam.ActiveDuration,
             EndFrames = beam.EndFrames,
             KnifeMode = beam.MomKnifeDriven == true,
+            SpiritSwordKnifeFromHilt = beam.SpiritSwordKnifeFromHilt == true,
+            SpiritSwordSpinThrow = beam.SpiritSwordSpinThrow == true,
+            SpiritSwordThrowSource = beam.MomKnife and beam.MomKnife:GetData().MizukiSpiritSwordThrowAttack,
+            SpiritSwordKnifeLaunchDistance = beam.SpiritSwordKnifeLaunchDistance,
             KnifeCharge = math.max(0, math.min(charge / math.max(1, baseChargeFrames), 1))}
         if child.KnifeMode then
             local knife = beam.MomKnife
             if not knife or not knife:Exists() then return end
             child.KnifeOrigin = vector(knife.Position + knife.PositionOffset)
-            child.KnifeVariant = knife.Variant
+            child.KnifeVariant = Mizuki.getCannonKnifeArtVariant(knife)
             child.BerserkClub = knife:GetData().MizukiBerserkClub == true
             child.KnifeSpriteRotationOffset = getKnifeSpriteRotationOffset(knife)
+        end
+        if beam.TechXDriven then
+            child.TechXSource = beam
+            child.RingSequence = Mizuki.startEchoAttackRecording(beam.TechXRing)
+            parameters.TechXDamageMultiplier = parameters.TechXDamageMultiplier * shot.DamageMultiplier
         end
         table.insert(shot.Children, child)
         child.AttackSequence = Mizuki.startEchoAttackRecording(beam.Laser)
@@ -395,6 +499,30 @@ do
     local function replayChild(child)
         child.Started = true
         child.StartFrame = Game():GetFrameCount()
+        if child.BerserkSwingAttack then
+            local swing = Mizuki.replayBerserkClubSwing(child.Shot.Player, child.Ghost,
+                child.BerserkSwingAttack, child.Shot.DamageMultiplier)
+            child.Knife = swing and swing.Body
+            child.BerserkSwingVisualEnd = swing and child.StartFrame + swing.Duration
+            child.Ending = true
+            return
+        end
+        if child.SpiritSwordAttack then
+            local attack = Mizuki.replaySpiritSwordAttack(child.Shot.Player, child.Ghost,
+                child.SpiritSwordAttack, child.Shot.DamageMultiplier)
+            child.SpiritSwordVisualEnd = child.StartFrame + attack.Duration
+            child.Ending = true
+            return
+        end
+        if child.TrisagionShot then
+            local source = child.TrisagionShot
+            Mizuki.fireCannonTrisagion(child.Shot.Player, child.Ghost,
+                { Origin = source.Origin, Direction = source.Direction },
+                source.DamageMultiplier, source, child.Shot.DamageMultiplier)
+            child.TrisagionVisualEnd = child.StartFrame + Mizuki.DEFAULT_BEAM_DURATION
+            child.Ending = true
+            return
+        end
         local laser = Mizuki.createCannonBeam(child.Shot.Player, child.BeamParameters)
         child.Laser = laser
         laser:GetData().MizukiEchoBeam = true
@@ -404,6 +532,21 @@ do
             Alpha = Mizuki.CannonEchoReplayAlpha, Tint = true, LaserSpawner = child.Ghost})
         Mizuki.bindCannonAttackAppearance(child.Ghost, laser, 1)
         applyLaserAppearance(laser, child)
+        if child.TechXSource then
+            Mizuki.attachCannonTechX(child, child.Shot.Player)
+            if child.TechXLinked and not child.TechXRailRingOnly then
+                laser:GetData().MizukiTechXConnection = child
+            end
+            local ring = child.TechXRing
+            ring:GetData().MizukiEchoBeam = true
+            ring:GetData().MizukiEchoChild = child
+            Mizuki.bindEchoAttackReplay(ring, child.RingSequence, {
+                Alpha = Mizuki.CannonEchoReplayAlpha, Tint = true, LaserSpawner = child.Ghost})
+        end
+        for _, source in ipairs(child.BerserkLungShots or {}) do
+            Mizuki.fireBerserkLungTear(child.Shot.Player, source.Position, source.Velocity,
+                1, source, child.Shot.DamageMultiplier)
+        end
         if child.KnifeMode then
             local ghostData = child.Ghost:GetData()
             local knife = ghostData.MizukiEchoWaitingKnife
@@ -428,12 +571,33 @@ do
     end
 
     local function updateShot(shot, frame)
+        for _, child in ipairs(shot.Children) do
+            local packet = child.SpiritSwordPacket or child.BerserkSwingPacket
+            local ready = child.SpiritSwordReadyFrame or child.BerserkSwingReadyFrame
+            if packet and frame >= ready then
+                local source = child.SpiritSwordAttack or child.BerserkSwingAttack
+                if not valid(source.Cannon, source.CannonSeed) then removeShot(shot); return end
+                local hash = GetPtrHash(source.Cannon)
+                local ghost = shot.GhostByCannon[hash]
+                if not ghost then
+                    ghost = makeGhost(shot, packet)
+                    shot.GhostByCannon[hash] = ghost
+                end
+                if child.BerserkSwingAttack then ghost:GetData().MizukiBerserkSwingEchoSource = source
+                else ghost:GetData().MizukiSpiritSwordEchoSource = source end
+                updateSwordGhostPlacement(ghost, shot)
+                child.Ghost, child.Cannon = ghost, ghost
+                child.SpiritSwordPacket = nil
+                child.BerserkSwingPacket = nil
+            end
+        end
         if not shot.ReplayFrame then return end
         local age = frame - shot.ReplayFrame
         local allDone = true
         local pepperAttacks = {}
         for _, child in ipairs(shot.Children) do
-            if not child.Started and age >= child.Offset then
+            if not child.Started and age >= child.Offset
+                and (not (child.SpiritSwordAttack or child.BerserkSwingAttack) or child.Ghost) then
                 replayChild(child)
                 if child.PepperAttack then
                     local group = pepperAttacks[child.PepperAttack] or {}
@@ -443,7 +607,10 @@ do
             end
             if child.Started and not child.Ending then
                 local knife = child.Knife
-                if child.KnifeMode and knife and knife:Exists() then
+                if child.TechXDriven then
+                    Mizuki.updateCannonTechXReplay(child, frame)
+                    if child.TechXReleased then child.Ending = true end
+                elseif child.KnifeMode and knife and knife:Exists() then
                     local motionSource = getEchoMotionSource(knife)
                     if frame > child.StartFrame and (not motionSource or not motionSource:IsFlying()) then
                         beginEnding(child)
@@ -457,14 +624,18 @@ do
             local laserAlive = child.Laser and child.Laser:Exists()
             local motionSource = getEchoMotionSource(child.Knife)
             local knifeAlive = motionSource and motionSource:IsFlying()
-            if not child.Started or laserAlive or knifeAlive then allDone = false end
+            local ringAlive = child.TechXRing and child.TechXRing:Exists()
+            if not child.Started or laserAlive or knifeAlive or ringAlive
+                or (child.TrisagionVisualEnd and frame < child.TrisagionVisualEnd)
+                or (child.SpiritSwordVisualEnd and frame < child.SpiritSwordVisualEnd) then allDone = false end
+            if child.BerserkSwingVisualEnd and frame < child.BerserkSwingVisualEnd then allDone = false end
         end
-        if Mizuki.recordPepperEchoAttack then
-            for attack, children in pairs(pepperAttacks) do
-                Mizuki.recordPepperEchoAttack(shot.Player, attack, children)
-            end
+        for attack, children in pairs(pepperAttacks) do
+            Mizuki.recordPepperEchoAttack(shot.Player, attack, children)
         end
-        if allDone or age >= MAX_REPLAY_FRAMES then
+        local hasTechX = false
+        for _, child in ipairs(shot.Children) do if child.TechXSource then hasTechX = true; break end end
+        if allDone or (not hasTechX and age >= MAX_REPLAY_FRAMES) then
             shot.FadeFrame = shot.FadeFrame or frame
             for _, ghost in ipairs(shot.Ghosts) do
                 if ghost:Exists() and ghost:GetData().MizukiEchoCannon == true then
@@ -534,6 +705,9 @@ do
     local function updateKnife(_, knife)
         if not isEchoKnife(knife) then return end
         local data = knife:GetData()
+        -- Native split knives have their own endpoint controller. Keep the echo
+        -- identity for damage scaling, without running the source flight twice.
+        if data.MizukiMultidimensionalKnife == true then return end
         local child = data.MizukiEchoChild
         if not child or not liveShots[child.Shot] or child.Shot.Removed or not child.Ghost:Exists() then
             removeEchoKnife(knife)
@@ -543,6 +717,14 @@ do
         if not Mizuki.applyEchoAttackSequence(knife) then
             knife.Color = Mizuki.getCannonEchoColor(data.MizukiEchoKnifeBaseColor,
                 data.MizukiEchoFired and Mizuki.CannonEchoReplayAlpha or Mizuki.CannonEchoWaitingAlpha)
+            Mizuki.keepSplitKnifeSourceHidden(knife)
+            if data.MizukiBerserkCollisionProxy == true then
+                data.MizukiCannonKnifeDrawColor = color(knife.Color)
+                local hidden = color(knife.Color)
+                hidden.A = 0
+                knife.Color = hidden
+                knife:GetSprite().Color = hidden
+            end
         end
         if data.MizukiEchoFired then
             data.MizukiEchoKnifeAge = data.MizukiEchoKnifeAge + 1
@@ -592,8 +774,10 @@ do
             ghost:Remove()
             return
         end
-        ghost.Position = vector(data.MizukiEchoAnchor)
-        ghost.Velocity = Vector.Zero
+        if not updateSwordGhostPlacement(ghost, shot) then
+            ghost.Position = vector(data.MizukiEchoAnchor)
+            ghost.Velocity = Vector.Zero
+        end
         updateGhostShadow(ghost)
     end
 
@@ -603,6 +787,7 @@ do
         local shot = data.MizukiEchoShot
         if data.MizukiEchoAwaitingShot or not shot or not liveShots[shot] or shot.Removed
             or not eligible(shot.Player) or shot.FadeFrame or data.MizukiEchoKnifeMode
+            or data.MizukiEchoBerserkSwingMode
             or not enemy:IsVulnerableEnemy()
             or enemy:HasEntityFlags(EntityFlag.FLAG_FRIENDLY) then return true end
         local frame, key = Game():GetFrameCount(), GetPtrHash(enemy)
@@ -619,8 +804,31 @@ do
         if data.MizukiEchoCannon ~= true then return end
         local shot = data.MizukiEchoShot
         if data.MizukiEchoAwaitingShot or not shot or not liveShots[shot] or shot.Removed then return end
+        if data.MizukiEchoSwordMode then Mizuki.renderSpiritSwordEcho(ghost, renderOffset); return end
+        if data.MizukiEchoBerserkSwingMode then return end -- the independent knife renders its swing
         if data.MizukiEchoKnifeMode then
-            if Mizuki.renderCannonKnifeLaserRoots then Mizuki.renderCannonKnifeLaserRoots(ghost, renderOffset) end
+            Mizuki.renderCannonKnifeLaserRoots(ghost, renderOffset)
+            -- The ghost's slot is below its native knife bodies (+1 depth).
+            -- Draw their glow here rather than over them in POST_KNIFE_RENDER.
+            local game = Game()
+            local function drawKnifeGlow(knife)
+                if not knife or not knife:Exists() or not isEchoKnife(knife) then return end
+                if knife:GetData().MizukiMultidimensionalKnifeSuppressed == true then return end
+                if Mizuki.renderBerserkEchoKnife(knife, renderOffset) then return end
+                local screen = Isaac.WorldToScreen(knife.Position + knife.PositionOffset) + renderOffset
+                    - game:GetRoom():GetRenderScrollOffset() - game.ScreenShakeOffset
+                Mizuki.renderDeadEyeGlow(knife, screen, knife:GetSprite().Scale,
+                    knife.Color.A, nil, knife.SpriteRotation)
+            end
+            drawKnifeGlow(data.MizukiEchoWaitingKnife)
+            for _, child in ipairs(shot.Children) do
+                if Mizuki.isSameEntity(child.Ghost, ghost) then drawKnifeGlow(child.Knife) end
+            end
+            for _, knife in ipairs(data.MizukiAuxiliaryMomKnives or {}) do
+                if knife:Exists() and knife:GetData().MizukiNativeMultidimensionalKnife == true then
+                    drawKnifeGlow(knife)
+                end
+            end
             return
         end
         local game, sprite = Game(), data.MizukiEchoBodySprite
@@ -638,6 +846,7 @@ do
         sprite.Offset = Vector.Zero
         local screen = Isaac.WorldToScreen(position) + renderOffset
             - room:GetRenderScrollOffset() - game.ScreenShakeOffset
+        Mizuki.renderDeadEyeGlow(ghost, screen, sprite.Scale, sprite.Color.A, nil, sprite.Rotation)
         if not Mizuki.renderCannonAttackAppearance(ghost, sprite, screen) then
             sprite:RenderLayer(0, screen, Vector.Zero, Vector.Zero)
             sprite:RenderLayer(1, screen, Vector.Zero, Vector.Zero)
@@ -671,8 +880,8 @@ do
 
     function Mizuki.getPersistentCannonEchoMode(player)
         if not Mizuki.hasCannonEcho(player) then return nil end
-        if player:HasCollectible(CollectibleType.COLLECTIBLE_C_SECTION) then return nil end
-        if player:HasCollectible(CollectibleType.COLLECTIBLE_LUDOVICO_TECHNIQUE) then
+        if Mizuki.usesCSectionWeapon(player) then return nil end
+        if Mizuki.usesLudovicoWeapon(player) then
             return "ludovico"
         end
         if Mizuki.usesAutomaticBeam(player) then return "automatic" end
@@ -727,9 +936,15 @@ do
         "MizukiCannonBodyRotation", "MizukiVerticalBodyXFactor",
         "MizukiReflectionBodyXFactor", "MizukiReflectionSpan", "MizukiRenderWorldOffset",
         "MizukiBobOffsetY", "MizukiIsIdle", "MizukiIdleRotationOffset",
+        "MizukiIdleScreenXScale",
+        "MizukiIdleFlipProgress",
+        "MizukiIdleAngleMirrorProgress",
+        "MizukiIdleFlipBaseRotation",
+        "MizukiIdleDepthOrder",
         "MizukiAutoFireReturnTarget",
         "MizukiSpecialBrimstoneCurse",
         "MizukiCannonAttackAppearanceKey",
+        "MizukiDeadEyeIntensity",
     }
     local function copyPoseValue(value)
         if type(value) == "userdata" or type(value) == "table" then
@@ -836,6 +1051,8 @@ do
     -- Attack state shares the pose clock. Unlike the visual warm-up fallback,
     -- firing requires an EXACT delayed sample: an old idle pose must never shoot.
     function Mizuki.getAutomaticCannonEchoAttack(data, side)
+        local cannon = data.MizukiCannons and data.MizukiCannons[side] and data.MizukiCannons[side][1]
+        if side == 2 and Mizuki.isTech2Cannon(cannon) then return end
         local history = data.MizukiAutomaticEchoHistory
             and data.MizukiAutomaticEchoHistory[side]
         local sample = history and history.Samples[
@@ -857,8 +1074,8 @@ do
                 local source = data.MizukiCannons[side] and data.MizukiCannons[side][1]
                 local attack
                 for _, beam in ipairs((data.MizukiActiveBeams or {})[side] or {}) do
-                    if beam.Cannon == source and not beam.PersistentEchoMode
-                        and beam.Automatic and not beam.Ending
+                    if Mizuki.isSameEntity(beam.Cannon, source) and not beam.PersistentEchoMode
+                        and beam.Automatic and not beam.Technology2 and not beam.Ending
                         and beam.Laser and beam.Laser:Exists() then
                         attack = attack or {Angles = {}, Shots = {}, DamageMultiplier = beam.DamageMultiplier}
                         attack.Angles[#attack.Angles + 1] = beam.DirectionOffset or 0
@@ -895,7 +1112,7 @@ do
                 for index, shot in ipairs(attack.Shots) do
                     local exists = false
                     for _, beam in ipairs((data.MizukiActiveBeams or {})[side] or {}) do
-                        if beam.Cannon == ghost and beam.PersistentEchoMode == "automatic"
+                        if Mizuki.isSameEntity(beam.Cannon, ghost) and beam.PersistentEchoMode == "automatic"
                             and not beam.Ending and beam.Laser and beam.Laser:Exists()
                             and beam.PersistentEchoSourceSeed == shot.SourceSeed
                             and beam.PersistentEchoSourceHash == shot.SourceHash then
@@ -969,7 +1186,7 @@ do
     end
     local function eligible(player)
         return Mizuki.hasCannonEcho(player)
-            and player:HasCollectible(CollectibleType.COLLECTIBLE_C_SECTION)
+            and Mizuki.usesCSectionWeapon(player)
     end
     local function removeShot(shot)
         local ghost = shot.Ghost

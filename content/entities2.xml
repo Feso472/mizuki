@@ -1,5 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <entities anm2root="gfx/" version="5">
+    <!-- Sword artwork only; native depth sorting places each hand around its owner. -->
+    <entity name="Mizuki Spirit Sword Renderer"
+            anm2path="entities/mizuki/spirit_sword_hilt.anm2"
+            id="1000" variant="9206" subtype="0"
+            baseHP="0" boss="0" champion="0" collisionDamage="0"
+            collisionMass="0" collisionRadius="0" friction="1"
+            numGridCollisionPoints="0" shadowSize="0" stageHP="0" />
+    <!-- Native knife parent: resolves its player without a familiar weapon check. -->
+    <entity name="Mizuki Knife Flight Anchor"
+            anm2path="entities/mizuki/knife_flight_anchor.anm2"
+            id="1000" variant="9205" subtype="0"
+            baseHP="0" boss="0" champion="0" collisionDamage="0"
+            collisionMass="0" collisionRadius="0" friction="1"
+            numGridCollisionPoints="0" shadowSize="0" stageHP="0" />
     <!-- C Section echo: separate identity, no gifts or projectile blocking. -->
     <entity name="Mizuki Echo Fan"
             anm2path="entities/mizuki/xbt.anm2"

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <pocketitems>
     <card type="object"
-          name="#EXPERIMENTAL_PILL_NAME"
+          name="实验性胶囊"
           hud="Mizuki Experimental Capsule"
           description="实验性胶囊？"
           pickup="9201"

@@ -6,6 +6,7 @@
 
 # Local Codex guidance and archived experiments
 AGENTS.md
+dev/
 dev_backups/
 tools/
 
@@ -16,6 +17,8 @@ catalog/
 docs/
 tests/
 scripts/*_trace.lua
+*.xml.language-new
+*.xml.language-old
 
 # Editable sprite source files; exported game assets stay tracked
 *.ase

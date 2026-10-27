@@ -1,9 +1,7 @@
 -- The experimental capsule pocket item: native pill replay, hour glass
 -- variants and their pickups.
 --
--- Extracted from main.lua. main publishes the helpers this file needs on the
--- Mizuki table; the functions below are published there in turn for the code
--- that stayed behind.
+-- Character and cannon modules own the state tables used by capsule transactions.
 
 local GLOWING_HOUR_GLASS = Mizuki.GLOWING_HOUR_GLASS
 local EXPERIMENTAL_CAPSULE_PICKUP_SUBTYPE = Mizuki.EXPERIMENTAL_CAPSULE_PICKUP_SUBTYPE

@@ -26,6 +26,12 @@ return {
         ContinueEID = "Continue the challenge for more items#{{Warning}} Picking up an item ends the challenge chain",
     },
     Fan = {
+        Description = "A helpful companion",
+        NativeInfo = {
+            "50% chance to block enemy projectiles",
+            "Drops a needed pickup each floor",
+            "Chance to drop an extra needed pickup after clearing a room",
+        },
         Name = "Xiaobotu",
         EID = "{MIZUKI_FAN_BLOCK_CHANCE}% chance to block enemy projectiles{MIZUKI_FAN_BFFS_BLOCK}{MIZUKI_FAN_C_SECTION}"
             .. "#Drops 1 pickup the character needs most each floor"

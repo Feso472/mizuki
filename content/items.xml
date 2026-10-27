@@ -2,7 +2,8 @@
 <items gfxroot="gfx/items/" version="1">
     <!-- Internal character item: quest keeps it out of rerolls; omitting
          uniquefamiliar intentionally allows Box of Friends to copy it. -->
-    <familiar name="Xiaobotu"
+    <familiar id="0" name="小博兔"
+              description="可靠的小帮手"
               gfx="mizuki/mizuki_fan.png"
               cache="familiars"
               quality="0"

@@ -130,7 +130,7 @@ end
 
 function Mizuki.updateFanFetus(familiar, player)
     local data = familiar:GetData()
-    if not player:HasCollectible(CollectibleType.COLLECTIBLE_C_SECTION) then
+    if not Mizuki.usesCSectionWeapon(player) then
         data.MizukiFanFetusCooldown = nil
         data.MizukiFanFetusInterval = nil
         data.MizukiFanFetusCharge = nil
@@ -143,7 +143,7 @@ function Mizuki.updateFanFetus(familiar, player)
 
     -- Direct fire: the first shot is immediate; subsequent shots use the
     -- ordinary fire interval. Keep the remaining fraction when Tears changes.
-    local interval = math.max(player.MaxFireDelay + 1, 1)
+    local interval = Mizuki.getFireInterval(player)
     local cooldown = data.MizukiFanFetusCooldown or 0
     local previousInterval = data.MizukiFanFetusInterval
     if previousInterval and math.abs(previousInterval - interval)
@@ -170,11 +170,14 @@ function Mizuki.updateFanFetus(familiar, player)
         -- Both additions stay ordinary tears and originate from gbt.
         Mizuki.tryFireImmaculateHeartTear(player, direction:Rotated(angle),
             familiar.Position, familiar)
-        Mizuki.advanceLeadPencil(player, direction:Rotated(angle),
+        Mizuki.recordExtraAttack(player, direction:Rotated(angle),
             familiar.Position, familiar)
     end
     data.MizukiFanFetusCooldown = interval
-    if #fetuses > 0 then Mizuki.recordMomsWigFanVolley(player) end
+    if #fetuses > 0 then
+        Mizuki.recordFanInputAttackEffects(player, direction)
+        Mizuki.chargeIsaacsTearsFromAttack(player, 1)
+    end
     return fetuses
 end
 
@@ -269,7 +272,11 @@ end
 
 function Mizuki.prepareFetalBrimstone(tear, player)
     Mizuki.rollSpecialBrimstone(tear, player)
-    tear:GetData().MizukiFetalBrimstoneEnabled = player:HasCollectible(CollectibleType.COLLECTIBLE_BRIMSTONE)
+    local data = tear:GetData()
+    data.MizukiFetalBrimstoneEnabled = player:HasCollectible(CollectibleType.COLLECTIBLE_BRIMSTONE)
+    -- This factor belongs to the fireball, not the fetus's damage. Record it
+    -- at birth so echoes retain it even after the player's weapon changes.
+    data.MizukiFetalBrimstoneDamageMultiplier = Mizuki.getSecondaryBrimstoneDamageMultiplier(player)
 end
 
 local function applyBallAppearance(ball, fetus)
@@ -278,6 +285,7 @@ local function applyBallAppearance(ball, fetus)
     ball.PositionOffset = Vector(fetus.PositionOffset.X, fetus.PositionOffset.Y)
     ball.DepthOffset = fetus.DepthOffset - 10
     ball.CollisionDamage = fetus.CollisionDamage * 0.5
+        * (fetus:GetData().MizukiFetalBrimstoneDamageMultiplier or 1)
     ball.SpriteScale = Vector.One * (BALL_SCALE * fetus.Scale)
     -- Supply the native effect scale as well as its drawing scale.
     ball.Scale = BALL_SCALE * fetus.Scale

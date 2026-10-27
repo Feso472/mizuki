@@ -11,23 +11,22 @@ A character mod for The Binding of Isaac: Repentance / Repentance+. Uses native 
 
 ## Code layout
 
-Start with `main.lua` for the attack controller, then explore the relevant feature module.
+Start with `main.lua` for the load order, then open the module for the feature you need.
 
-- `main.lua`: character setup, stats, attack control and module loading.
-- `scripts/cannons.lua`: cannon deployment, following and contact damage.
-- `scripts/cannon_appearance.lua`: cannon appearance selection and rendering.
-- `scripts/cannon_echo.lua`: echo creation, following and delayed attacks.
-- `scripts/echo_attack_sequence.lua`: recording and replaying attack property changes.
-- `scripts/fan.lua`: Xiaobotu's following, gifts, projectile blocking and shared animations.
-- `scripts/c_section.lua`: C Section firing, fetus graphics, blocking and Brimstone fireballs.
-- `scripts/moms_knife.lua`: knife attacks, movement and rendering.
-- `scripts/berserk_club.lua`: Berserk swings, charged throws and melee interactions.
-- `scripts/epic_fetus.lua`: Epic Fetus targeting, rockets and cooldowns.
-- `scripts/peppers.lua`: pepper attacks and echo replay.
-- `scripts/weapon_synergies.lua`: shared item compatibility, including Dr. Fetus, Brimstone curses, Tech .5, Mom's Wig and Hemoptysis.
-- `scripts/birthright.lua`: Birthright, doctorate choices and challenge rewards.
-- `scripts/experimental_capsule.lua`: Experimental Capsule creation, use and state management.
-- `scripts/localization.lua`: pickup banners and EID integration.
+- `main.lua`: initialization and module loading.
+- `scripts/config.lua`: shared parameters, native IDs and layout constants.
+- `scripts/character.lua`: character appearance, stats and cache refresh.
+- `scripts/weapon_input.lua`: aiming and shared charge rules.
+- `scripts/weapon_controller.lua`: weapon priority and attack dispatch.
+- `scripts/weapon_beams.lua`: native beam creation, volleys and damage timing.
+- `scripts/callbacks.lua`: core callback registration order.
+- `scripts/cannons.lua`, `cannon_render.lua`, `cannon_appearance.lua`: cannon movement, drawing and appearance selection.
+- `scripts/cannon_echo.lua`, `echo_attack_sequence.lua`: delayed attacks and recorded attack properties.
+- `scripts/c_section.lua`, `moms_knife.lua`, `berserk_club.lua`, `spirit_sword.lua`: fetus, knife and melee weapons.
+- `scripts/tech_x.lua`, `ludovico.lua`, `technology2.lua`, `trisagion.lua`: ring, controlled projectile and laser weapons.
+- `scripts/weapon_synergies.lua`, `epic_fetus.lua`, `peppers.lua`: shared item interactions and additional attacks.
+- `scripts/fan.lua`, `birthright.lua`, `experimental_capsule.lua`: Xiaobotu, Birthright and capsules.
+- `scripts/localization.lua`: pickup text and EID integration.
 - `translations/`: English and Chinese text and language loading.
 - `content/`: character, item and entity definitions.
 - `resources/`: graphics and animations.
